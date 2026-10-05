@@ -1,0 +1,20 @@
+name = "Falsify"
+uuid = "c5d19932-e962-43fb-bfa3-3d5114a46ee3"
+version = "0.1.0"
+
+[deps]
+OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+
+[compat]
+julia = "=1.12.7"
+OrdinaryDiffEqTsit5 = "1"
+SciMLBase = "2"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

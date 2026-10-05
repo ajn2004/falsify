@@ -142,14 +142,14 @@ Python may be introduced later when a specific library provides a concrete resea
 Prefer a structure similar to:
 
 ```text
-closed-loop-science/
+falsify/
 ├── AGENTS.md
 ├── README.md
 ├── Project.toml
 ├── Manifest.toml
 │
 ├── src/
-│   ├── ClosedLoopScience.jl
+│   ├── Falsify.jl
 │   ├── environments/
 │   ├── protocol/
 │   ├── baselines/
@@ -687,7 +687,7 @@ Development is tracked in the Daleego Linear team.
 
 Project:
 
-**Closed-Loop Science: Experimental Reasoning in LLM Agents**
+**Falsify: Experimental Reasoning in LLM Agents**
 
 Work from the ticket assigned for the current task.
 

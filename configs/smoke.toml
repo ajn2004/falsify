@@ -1,0 +1,7 @@
+# Disposable package-bootstrap smoke calculation; not an experiment protocol.
+initial_value = 1.0
+decay_rate = 0.5
+final_time = 2.0
+sample_count = 5
+noise_seed = 211
+noise_scale = 0.01
