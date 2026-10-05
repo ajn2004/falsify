@@ -23,6 +23,12 @@ where `x` is displacement, `ζ` is a damping ratio, `ω₀` is an undamped natur
 
 The V0.1 estimand is the difference in preregistered performance between policies under matched worlds, budgets, and observation conditions. Whether the primary endpoint is parameter inference, held-out prediction, or a declared combination remains to be decided in preregistration; it must not be selected after inspecting confirmatory outcomes.
 
+### V0 oscillator implementation (DAL-113)
+
+The current apparatus samples `ζ ~ Uniform[0.05, 0.40]` and `ω₀ ~ Uniform[0.80, 2.00]` (angular-frequency units are rad/s) sequentially from a `MersenneTwister(world_seed)`. The physical truth is fixed per world. Each intervention supplies `x(0) ∈ [-2,2]`, `x'(0) ∈ [-2,2]`, drive-acceleration amplitude `A ∈ [-1,1]` m/s², and drive frequency `f ∈ [0,3]` Hz; the drive convention is `a_d(t)=A sin(2π f t)`. Defaults are `(x(0),x'(0),A,f)=(1,0,0,1)`. Invalid/non-finite values are rejected before solving. These bounds and distributions are V0 apparatus choices, not V0.1 preregistered inferential claims.
+
+The solver is SciML `Tsit5()` with `reltol=1e-9`, `abstol=1e-11`; observations are clean displacement values at `range(0, final_time; length=sample_count)` (defaults: 10 s and 101 samples). Displacement is in meters, time in seconds, and sinusoidal drive amplitude is acceleration in m/s² (the equation does not assume a mass). Per-world metadata records solver, tolerances, world seed, and package version. No observation noise is applied by this environment implementation; noise remains a separately owned protocol component. Environment-native types (`OscillatorExperiment`, `CleanOscillatorObservation`, `OscillatorTaskDescription`, and `OscillatorWorld`) are distinct from the policy-facing contract owned by DAL-114. The task description omits all truth and seed information. `OscillatorWorld`, `evaluator_truth`, and `metadata` are evaluator-side interfaces and must not be provided to policies. Julia object fields are introspectable, so this boundary depends on keeping evaluator objects out of policy reach, not on language-level field privacy.
+
 ## Experimental units and terminology
 
 - **Hidden world:** One generated oscillator instance, including its fixed physical truth and any world-level configuration. A world is evaluator-owned; a seed is not itself an agent-visible world descriptor.
