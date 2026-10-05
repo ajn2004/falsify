@@ -1,3 +1,4 @@
+
 module Falsify
 
 using OrdinaryDiffEqTsit5: Tsit5
@@ -27,7 +28,7 @@ Base.@kwdef struct OscillatorExperiment
     initial_displacement::Float64 = 1.0
     initial_velocity::Float64 = 0.0
     drive_acceleration_m_per_s2::Float64 = 0.0
-    drive_frequency_hz::Float64 = 1.0
+    drive_frequency_hz::Float64 = 0.0
 end
 
 struct CleanOscillatorObservation
@@ -119,5 +120,100 @@ function observe(world::OscillatorWorld, action::OscillatorExperiment)
         abstol=world.config.abstol, dense=false)
     CleanOscillatorObservation(times, Float64[point[1] for point in solution.u])
 end
+export ExperimentAction, to_environment_action, Measurement, Observation, PublicState, ActionLimits,
+       TaskDescription, policy_task, ValidationResult, validate_action, AbstractPolicy, next_action, limits_for, policy_observation
 
+"""Policy-facing oscillator controls, with SI units explicit in field names."""
+Base.@kwdef struct ExperimentAction
+    initial_displacement_m::Float64 = 1.0
+    initial_velocity_m_per_s::Float64 = 0.0
+    drive_acceleration_m_per_s2::Float64 = 0.0
+    drive_frequency_hz::Float64 = 0.0
+end
+to_environment_action(a::ExperimentAction) = OscillatorExperiment(
+    initial_displacement=a.initial_displacement_m,
+    initial_velocity=a.initial_velocity_m_per_s,
+    drive_acceleration_m_per_s2=a.drive_acceleration_m_per_s2,
+    drive_frequency_hz=a.drive_frequency_hz)
+
+struct ActionLimits
+    displacement_m::Tuple{Float64,Float64}
+    velocity_m_per_s::Tuple{Float64,Float64}
+    drive_acceleration_m_per_s2::Tuple{Float64,Float64}
+    drive_frequency_hz::Tuple{Float64,Float64}
+    duration_s::Float64
+    cadence_s::Float64
+    max_samples::Int
+    function ActionLimits(; displacement_m, velocity_m_per_s, drive_acceleration_m_per_s2,
+            drive_frequency_hz, duration_s, cadence_s, max_samples)
+        for (name, bounds) in ((:displacement_m, displacement_m), (:velocity_m_per_s, velocity_m_per_s),
+                (:drive_acceleration_m_per_s2, drive_acceleration_m_per_s2), (:drive_frequency_hz, drive_frequency_hz))
+            length(bounds) == 2 && all(isfinite, bounds) && bounds[1] <= bounds[2] ||
+                throw(ArgumentError("$name must be a finite ordered range"))
+        end
+        isfinite(duration_s) && duration_s > 0 || throw(ArgumentError("duration_s must be finite and positive"))
+        isfinite(cadence_s) && cadence_s > 0 || throw(ArgumentError("cadence_s must be finite and positive"))
+        max_samples >= 1 || throw(ArgumentError("max_samples must be positive"))
+        new(Tuple(Float64.(displacement_m)), Tuple(Float64.(velocity_m_per_s)),
+            Tuple(Float64.(drive_acceleration_m_per_s2)), Tuple(Float64.(drive_frequency_hz)),
+            Float64(duration_s), Float64(cadence_s), Int(max_samples))
+    end
+end
+struct ValidationResult
+    valid::Bool
+    code::Symbol
+end
+struct Measurement
+    time_s::Float64
+    displacement_m::Float64
+    uncertainty_m::Union{Nothing,Float64}
+end
+struct Observation
+    measurements::Tuple{Vararg{Measurement}}
+    noise_model::Union{Nothing,String}
+    noise_scale_m::Union{Nothing,Float64}
+end
+struct TaskDescription
+    model_description::String
+end
+policy_task(task::OscillatorTaskDescription) = TaskDescription(task.model_description)
+struct PublicState
+    task::TaskDescription
+    limits::ActionLimits
+    history::Tuple{Vararg{Tuple{ExperimentAction,Observation}}}
+    remaining_budget::Int
+end
+limits_for(task::OscillatorTaskDescription) = ActionLimits(
+    displacement_m=task.displacement_bounds, velocity_m_per_s=task.velocity_bounds,
+    drive_acceleration_m_per_s2=task.drive_acceleration_bounds_m_per_s2,
+    drive_frequency_hz=task.drive_frequency_bounds_hz, duration_s=task.final_time,
+    cadence_s=task.final_time / (task.sample_count - 1), max_samples=task.sample_count)
+policy_observation(clean::CleanOscillatorObservation) = Observation(
+    Tuple(Measurement(t, x, nothing) for (t, x) in zip(clean.times, clean.displacement)),
+    nothing, nothing)
+abstract type AbstractPolicy end
+function next_action(::AbstractPolicy, ::PublicState)
+    throw(MethodError(next_action, ()))
+end
+function validate_action(a::ExperimentAction, state::PublicState)
+    l = state.limits
+    inrange(x, r) = isfinite(x) && r[1] <= x <= r[2]
+    if state.remaining_budget <= 0
+        return ValidationResult(false, :budget_exhausted)
+    elseif !all((inrange(a.initial_displacement_m, l.displacement_m),
+                 inrange(a.initial_velocity_m_per_s, l.velocity_m_per_s),
+                 inrange(a.drive_acceleration_m_per_s2, l.drive_acceleration_m_per_s2),
+                 inrange(a.drive_frequency_hz, l.drive_frequency_hz)))
+        return ValidationResult(false, :out_of_bounds)
+    elseif a.drive_acceleration_m_per_s2 == 0 && a.drive_frequency_hz != 0
+        return ValidationResult(false, :invalid_drive)
+    elseif a.drive_acceleration_m_per_s2 != 0 && a.drive_frequency_hz <= 0
+        return ValidationResult(false, :invalid_drive)
+    elseif l.cadence_s <= 0 || l.duration_s <= 0 || l.max_samples < 1
+        return ValidationResult(false, :invalid_schedule)
+    elseif floor(Int, l.duration_s / l.cadence_s) + 1 > l.max_samples
+        return ValidationResult(false, :sample_budget_exceeded)
+    end
+    ValidationResult(true, :accepted)
+end
 end
