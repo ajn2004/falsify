@@ -1,4 +1,5 @@
 using Falsify
+using JSON3
 using Random
 using TOML
 using Test
@@ -25,6 +26,86 @@ Falsify.next_action(::TestPolicy, ::PublicState) = ExperimentAction(
         end
         @test TOML.parsefile(path)["values"] == first_run
     end
+end
+
+struct FakeModelClient <: AbstractModelClient
+    content::String
+    fail::Bool
+    captured::Base.RefValue{Union{Nothing,ModelRequest}}
+end
+function Falsify.request(client::FakeModelClient, request::ModelRequest)
+    client.captured[] = request
+    client.fail && error("private provider diagnostic with truth 0.123")
+    ModelResponse(client.content; metadata=ModelMetadata(provider="mock", model="fixed"))
+end
+
+@testset "provider-independent scientist policy" begin
+    world = generate_world(7123; config=OscillatorConfig(1.0, 3))
+    limits = limits_for(public_task(world))
+    action0 = ExperimentAction(initial_displacement_m=0.25, initial_velocity_m_per_s=-0.1)
+    observation = Observation((Measurement(0.0, 0.25, nothing), Measurement(0.5, 0.1, nothing)), nothing, nothing)
+    state = PublicState(policy_task(public_task(world)), limits, ((action0, observation),), 4)
+    good = """{"initial_displacement_m":0.5,"initial_velocity_m_per_s":0.2,"drive_acceleration_m_per_s2":0.0,"drive_frequency_hz":0.0}"""
+    captured = Ref{Union{Nothing,ModelRequest}}(nothing)
+    policy = ScientistPolicy(FakeModelClient(good, false, captured))
+    expected = ExperimentAction(initial_displacement_m=0.5, initial_velocity_m_per_s=0.2)
+    @test next_action(policy, state) == expected
+    req = captured[]
+    @test req isa ModelRequest
+    @test req.prompt_version == PROMPT_VERSION
+    @test req.task_description == state.task.model_description
+    @test req.remaining_intervention_budget == 4
+    @test occursin("For an unforced experiment, set both drive_acceleration_m_per_s2 and drive_frequency_hz to 0.", req.system_instruction)
+    @test occursin("For a driven experiment, drive_acceleration_m_per_s2 must be nonzero and drive_frequency_hz must be strictly positive.", req.system_instruction)
+    @test req.limits.initial_displacement_m == limits.displacement_m
+    @test req.history[1].action == action0
+    @test req.history[1].observation.measurements[2].displacement_m == 0.1
+    serialized = JSON3.write(req)
+    @test !occursin("OscillatorWorld", serialized)
+    @test !occursin("truth", serialized)
+    @test !occursin("world_seed", serialized)
+    @test !occursin("condition_id", serialized)
+    @test !occursin("evaluator", serialized)
+    @test !occursin("provenance", serialized)
+    @test !occursin("advisor", serialized)
+    @test !occursin(string(metadata(world).world_seed), serialized)
+    @test fieldnames(ModelRequest) == (:prompt_version, :system_instruction, :task_description,
+        :limits, :remaining_intervention_budget, :history)
+    @test !hasfield(ModelRequest, :world)
+    @test !hasfield(ModelRequest, :provenance)
+    @test model_request(state) == model_request(state)
+    @test !occursin("reasoning", lowercase(SCIENTIST_PROMPT))
+
+    for (body, code) in (("{", :malformed_response),
+            ("{\"initial_displacement_m\":0,\"initial_velocity_m_per_s\":0,\"drive_acceleration_m_per_s2\":0}", :missing_required_field),
+            ("{\"initial_displacement_m\":\"0\",\"initial_velocity_m_per_s\":0,\"drive_acceleration_m_per_s2\":0,\"drive_frequency_hz\":0}", :invalid_field_type),
+            ("{\"initial_displacement_m\":1e999,\"initial_velocity_m_per_s\":0,\"drive_acceleration_m_per_s2\":0,\"drive_frequency_hz\":0}", :nonfinite_field))
+        fake = FakeModelClient(body, false, Ref{Union{Nothing,ModelRequest}}(nothing))
+        err = try
+            next_action(ScientistPolicy(fake), state)
+            nothing
+        catch e
+            e
+        end
+        @test err isa PolicyFailure
+        @test err.code == code
+    end
+    client_error = try
+        next_action(ScientistPolicy(FakeModelClient(good, true, Ref{Union{Nothing,ModelRequest}}(nothing))), state)
+        nothing
+    catch e
+        e
+    end
+    @test client_error isa PolicyFailure
+    @test client_error.code == :client_failure
+    @test !occursin("truth", sprint(showerror, client_error))
+
+    outside = """{"initial_displacement_m":99,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":0}"""
+    parsed_action = next_action(ScientistPolicy(FakeModelClient(outside, false,
+        Ref{Union{Nothing,ModelRequest}}(nothing))), state)
+    @test parsed_action.initial_displacement_m == 99
+    @test validate_action(parsed_action, state).code == :out_of_bounds
+    @test validate_action(expected, state).valid
 end
 
 @testset "Hidden damped oscillator" begin
