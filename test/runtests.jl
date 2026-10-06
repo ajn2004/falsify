@@ -101,6 +101,70 @@ end
     @test obs.noise_scale_m === nothing
 end
 
+@testset "non-adaptive experimental baselines" begin
+    world = generate_world(481; config=OscillatorConfig(1.0, 11))
+    limits = limits_for(public_task(world))
+    task = policy_task(public_task(world))
+    empty_state = PublicState(task, limits, (), 12)
+    state_at(history, budget=12) = PublicState(task, limits, history, budget)
+    controls(action) = (action.initial_displacement_m, action.initial_velocity_m_per_s,
+        action.drive_acceleration_m_per_s2, action.drive_frequency_hz)
+
+    random_sequence(seed) = [next_action(RandomPolicy(seed), empty_state)] # independent instance sanity
+    function sequence(seed)
+        policy = RandomPolicy(seed)
+        [next_action(policy, empty_state) for _ in 1:12]
+    end
+    @test controls.(sequence(42)) == controls.(sequence(42))
+    @test controls.(sequence(42)) != controls.(sequence(43))
+    baseline = sequence(42)
+    for action in baseline
+        @test validate_action(action, empty_state).valid
+        @test limits.displacement_m[1] <= action.initial_displacement_m <= limits.displacement_m[2]
+        @test limits.velocity_m_per_s[1] <= action.initial_velocity_m_per_s <= limits.velocity_m_per_s[2]
+        @test action.drive_acceleration_m_per_s2 == 0 ? action.drive_frequency_hz == 0 : action.drive_frequency_hz > 0
+    end
+    # Global random consumption cannot perturb the policy-owned RNG stream.
+    first = sequence(901)
+    rand(MersenneTwister(1), 10_000)
+    @test controls.(sequence(901)) == controls.(first)
+
+    policy = FixedDesignPolicy()
+    action0 = ExperimentAction(initial_displacement_m=0.0)
+    obs_a = Observation((Measurement(0.0, -100.0, nothing),), nothing, nothing)
+    design = [next_action(policy, state_at(ntuple(_ -> (action0, obs_a), i-1), 12-i+1)) for i in 1:12]
+    @test all(a -> validate_action(a, empty_state).valid, design)
+    # Different measurement values at the same history length do not change the choice.
+    obs_b = Observation((Measurement(0.0, 100.0, nothing),), nothing, nothing)
+    h_a = ((action0, obs_a),)
+    h_b = ((action0, obs_b),)
+    @test controls(next_action(policy, state_at(h_a))) == controls(next_action(policy, state_at(h_b)))
+    @test controls.(design[1:4]) != controls.(design[5:8])
+    @test controls(design[1]) == controls(design[11]) # deterministic cycling after base design
+    @test controls(next_action(policy, empty_state)) == controls(design[1]) # budget-independent prefix
+    @test policy_identity(RandomPolicy(5)).name == "random"
+    @test policy_configuration(RandomPolicy(5)) == (seed=5, driven_probability=0.5)
+    @test policy_identity(policy).name == "fixed_design"
+    @test policy_configuration(policy).cycling == "repeat_from_first_point"
+
+    for budget in (1, 3, 8, 12)
+        short = PublicState(task, limits, (), budget)
+        @test validate_action(next_action(policy, short), short).valid
+    end
+    @test_throws ArgumentError next_action(policy, PublicState(task, limits, (), 0))
+    exhausted_state = PublicState(task, limits, (), 0)
+    @test_throws ArgumentError next_action(RandomPolicy(42), exhausted_state)
+    @test !validate_action(next_action(RandomPolicy(42), empty_state), exhausted_state).valid
+    @test !validate_action(next_action(policy, empty_state), exhausted_state).valid
+
+    driven_frequencies = sort(unique(a.drive_frequency_hz for a in Falsify._fixed_design(limits)
+        if a.drive_acceleration_m_per_s2 != 0))
+    @test driven_frequencies == [0.75, 1.875, 3.0]
+    @test fieldtypes(RandomPolicy) == (Int, MersenneTwister, Float64)
+    @test !any(T -> T === OscillatorWorld, fieldtypes(RandomPolicy))
+    @test !any(T -> T === OscillatorWorld, fieldtypes(FixedDesignPolicy))
+end
+
 @testset "immutable run artifacts and provenance" begin
     mktempdir() do temp
         world = generate_world(9182; config=OscillatorConfig(1.0, 3))
