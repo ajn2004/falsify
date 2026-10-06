@@ -37,14 +37,15 @@ protocol.
     {"time_s": 0.0, "displacement_m": 0.1, "uncertainty_m": 0.01},
     {"time_s": 0.1, "displacement_m": 0.096, "uncertainty_m": 0.01}
   ],
-  "noise_model": "gaussian",
-  "noise_scale_m": 0.01
+  "noise_model": "gaussian_additive",
+  "noise_scale_m": 0.10
 }
 ```
 
-Each measurement contains only sampled displacement and its time. Uncertainty
-and noise metadata may be `null` when the participant protocol does not reveal
-them. Clean measurements have exactly zero intentionally added noise. Hidden
+Each measurement contains only sampled displacement and its time. Measurement
+uncertainty equals the declared Gaussian sigma (zero in clean). Noise metadata
+is always disclosed: clean uses `noise_model="none"`, `noise_scale_m=0.0`; noisy
+uses `noise_model="gaussian_additive"`, `noise_scale_m=0.10`. Hidden
 parameters, clean unsampled trajectories, seeds, solver diagnostics, and
 evaluator data are not fields of this contract.
 

@@ -2,13 +2,28 @@
 module Falsify
 
 using OrdinaryDiffEqTsit5: Tsit5
-using Random: MersenneTwister, rand
+using Random: MersenneTwister, rand, randn
 using SciMLBase: ODEProblem, solve
 using JSON3
 
 export OscillatorConfig, OscillatorExperiment, CleanOscillatorObservation,
        OscillatorTaskDescription, OscillatorMetadata, OscillatorWorld,
        generate_world, observe, public_task, evaluator_truth, metadata
+
+export ObservationNoise, CleanObservation, GaussianObservationNoise,
+       apply_measurement_process, NOISE_IMPLEMENTATION_VERSION
+
+abstract type ObservationNoise end
+struct CleanObservation <: ObservationNoise end
+struct GaussianObservationNoise <: ObservationNoise
+    sigma_m::Float64
+    function GaussianObservationNoise(sigma_m::Real)
+        isfinite(sigma_m) && sigma_m > 0 || throw(ArgumentError("sigma_m must be finite and positive"))
+        new(Float64(sigma_m))
+    end
+end
+const NOISE_IMPLEMENTATION_VERSION = "indexed-mt19937-julia-randn-v1"
+
 
 """Numerical and sampling configuration. Defaults are part of V0 apparatus."""
 struct OscillatorConfig
@@ -202,8 +217,25 @@ limits_for(task::OscillatorTaskDescription) = ActionLimits(
     drive_frequency_hz=task.drive_frequency_bounds_hz, duration_s=task.final_time,
     cadence_s=task.final_time / (task.sample_count - 1), max_samples=task.sample_count)
 policy_observation(clean::CleanOscillatorObservation) = Observation(
-    Tuple(Measurement(t, x, nothing) for (t, x) in zip(clean.times, clean.displacement)),
-    nothing, nothing)
+    Tuple(Measurement(t, x, 0.0) for (t, x) in zip(clean.times, clean.displacement)),
+    "none", 0.0)
+function _noise_stream_seed(seed::Integer, intervention_index::Integer)
+    seed >= 0 || throw(ArgumentError("noise seed must be nonnegative"))
+    intervention_index > 0 || throw(ArgumentError("intervention index must be positive"))
+    Int(mod(BigInt(seed) + BigInt(intervention_index) * 0x9e3779b97f4a7c15, BigInt(typemax(Int))))
+end
+function apply_measurement_process(clean::CleanOscillatorObservation, ::CleanObservation,
+        seed::Integer, intervention_index::Integer)
+    seed >= 0 || throw(ArgumentError("noise seed must be nonnegative"))
+    intervention_index > 0 || throw(ArgumentError("intervention index must be positive"))
+    Observation(Tuple(Measurement(t, x, 0.0) for (t, x) in zip(clean.times, clean.displacement)), "none", 0.0)
+end
+function apply_measurement_process(clean::CleanOscillatorObservation, noise::GaussianObservationNoise,
+        seed::Integer, intervention_index::Integer)
+    rng = MersenneTwister(_noise_stream_seed(seed, intervention_index))
+    Observation(Tuple(Measurement(t, x + noise.sigma_m * randn(rng), noise.sigma_m)
+        for (t, x) in zip(clean.times, clean.displacement)), "gaussian_additive", noise.sigma_m)
+end
 abstract type AbstractPolicy end
 function next_action(::AbstractPolicy, ::PublicState)
     throw(MethodError(next_action, ()))
