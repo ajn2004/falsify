@@ -1,7 +1,8 @@
 module RunController
 
 using Dates
-import ..Falsify: OscillatorWorld, public_task, policy_task, limits_for, PublicState,
+import ..Falsify: OscillatorWorld, ObservationNoise, CleanObservation, GaussianObservationNoise, NOISE_IMPLEMENTATION_VERSION,
+    apply_measurement_process, public_task, policy_task, limits_for, PublicState,
     DecisionHistoryEntry, ExperimentAction, PolicyDecision, next_decision, validate_action,
     to_environment_action, observe, policy_observation, policy_identity, policy_configuration,
     PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
@@ -14,13 +15,17 @@ export RunConfig, RunOutcome, run_experiment, validate_run_events
 struct RunConfig
     intervention_budget::Int
     max_decision_opportunities::Int
+    observation_noise::Union{CleanObservation,GaussianObservationNoise}
+    noise_seed::Int
     function RunConfig(intervention_budget::Integer; retry_allowance::Integer=intervention_budget,
-            max_decision_opportunities::Union{Nothing,Integer}=nothing)
+            max_decision_opportunities::Union{Nothing,Integer}=nothing,
+            observation_noise::Union{CleanObservation,GaussianObservationNoise}=CleanObservation(), noise_seed::Integer=0)
         intervention_budget >= 0 || throw(ArgumentError("intervention budget must be nonnegative"))
         retry_allowance >= 0 || throw(ArgumentError("retry allowance must be nonnegative"))
         maximum = max_decision_opportunities === nothing ? intervention_budget + retry_allowance : Int(max_decision_opportunities)
         maximum >= 0 || throw(ArgumentError("decision-opportunity limit must be nonnegative"))
-        new(Int(intervention_budget), maximum)
+        0 <= noise_seed <= typemax(Int) || throw(ArgumentError("noise seed must fit a nonnegative Int"))
+        new(Int(intervention_budget), maximum, observation_noise, Int(noise_seed))
     end
 end
 
@@ -81,7 +86,8 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
         validation = validate_action(action, state)
         if validation.valid
             clean = observe(world, to_environment_action(action))
-            observation = policy_observation(clean)
+            observation = apply_measurement_process(clean, config.observation_noise,
+                config.noise_seed, config.intervention_budget - remaining + 1)
             remaining -= 1
             push!(events, RunEvent(opportunities, action, true, "accepted", true, observation,
                 remaining, "running", time()-started, nothing, decision.operational_metadata))
@@ -111,11 +117,15 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
     ident = policy_identity(policy)
     public = PublicRunArtifact(; run_id, status, finalized_at=string(now(UTC)),
         task_description=task.model_description, action_limits=artifact_limits(limits),
-        intervention_budget=config.intervention_budget, protocol_settings=ProtocolSettings(false),
+        intervention_budget=config.intervention_budget, protocol_settings=ProtocolSettings(true),
         policy_identity=ident, events=Tuple(events), terminal)
-    provenance = capture_provenance(run_id; root, world, policy_seed=policy_seed(policy), repetition_id,
+    provenance = capture_provenance(run_id; root, world, noise_seed=config.noise_seed,
+        policy_seed=policy_seed(policy), repetition_id,
         configuration=(policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
-            retry_allowance=config.max_decision_opportunities-config.intervention_budget))
+            retry_allowance=config.max_decision_opportunities-config.intervention_budget,
+            noise_condition=config.observation_noise isa CleanObservation ? "clean" : "gaussian",
+            sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
+            noise_implementation=NOISE_IMPLEMENTATION_VERSION))
     evaluator = evaluator_artifact(world, run_id)
     RunOutcome(public, provenance, evaluator)
 end

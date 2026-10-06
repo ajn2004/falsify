@@ -210,8 +210,45 @@ end
     @test next_action(TestPolicy(), state).initial_displacement_m == valid.initial_displacement_m
     obs = policy_observation(observe(world, to_environment_action(valid)))
     @test length(obs.measurements) == task.sample_count
-    @test obs.noise_model === nothing
-    @test obs.noise_scale_m === nothing
+    @test obs.noise_model == "none"
+    @test obs.noise_scale_m == 0.0
+    @test [m.displacement_m for m in obs.measurements] == observe(world, to_environment_action(valid)).displacement
+end
+
+@testset "controlled observation noise" begin
+    @test_throws ArgumentError GaussianObservationNoise(0)
+    @test_throws ArgumentError GaussianObservationNoise(-0.1)
+    @test_throws ArgumentError GaussianObservationNoise(Inf)
+    clean = CleanOscillatorObservation(collect(1.0:1000.0), zeros(1000))
+    clean_obs = apply_measurement_process(clean, CleanObservation(), 12, 1)
+    @test all(m -> m.displacement_m === 0.0, clean_obs.measurements)
+    @test clean_obs.noise_model == "none" && clean_obs.noise_scale_m == 0.0
+    noisy = GaussianObservationNoise(0.1)
+    a = apply_measurement_process(clean, noisy, 12, 1)
+    b = apply_measurement_process(clean, noisy, 12, 1)
+    c = apply_measurement_process(clean, noisy, 13, 1)
+    eps = [m.displacement_m for m in a.measurements]
+    @test eps == [m.displacement_m for m in b.measurements]
+    @test eps != [m.displacement_m for m in c.measurements]
+    empirical_mean = sum(eps) / length(eps)
+    empirical_variance = sum((x - empirical_mean)^2 for x in eps) / (length(eps) - 1)
+    @test abs(empirical_mean) < 0.01
+    @test empirical_variance ≈ 0.01 atol=0.0015
+    @test a.noise_model == "gaussian_additive" && a.noise_scale_m == 0.1
+    serialized = JSON3.write(a)
+    @test !occursin("noise_seed", serialized)
+    @test !hasfield(typeof(a), :clean_measurements)
+    @test !hasfield(typeof(a), :noise_seed)
+    # Independent local noise generation cannot alter world or policy RNG.
+    truth0 = evaluator_truth(generate_world(991))
+    apply_measurement_process(clean, noisy, 71, 1)
+    @test evaluator_truth(generate_world(991)) == truth0
+    policy_state = PublicState(TaskDescription("task"), ActionLimits(displacement_m=(-2.,2.),
+        velocity_m_per_s=(-2.,2.), drive_acceleration_m_per_s2=(-1.,1.), drive_frequency_hz=(0.,3.),
+        duration_s=1., cadence_s=.5, max_samples=3), (), 2)
+    policy_before = next_action(RandomPolicy(827), policy_state)
+    apply_measurement_process(clean, noisy, 72, 2)
+    @test next_action(RandomPolicy(827), policy_state) == policy_before
 end
 
 @testset "non-adaptive experimental baselines" begin
@@ -374,6 +411,30 @@ end
     @test fixed.public.terminal.interventions_used == 2
     @test fixed.public.terminal.decision_opportunities_used == 2
     @test length(fixed.public.events) == 2
+    @test fixed.public.protocol_settings.observation_noise_disclosed
+
+    noisy_config = RunConfig(2; retry_allowance=1, observation_noise=GaussianObservationNoise(0.1), noise_seed=441)
+    noisy_run = run_experiment(world, FixedDesignPolicy(), noisy_config; root=normpath(joinpath(@__DIR__, "..")))
+    @test noisy_run.provenance.noise_seed == 441
+    @test noisy_run.provenance.configuration.noise_condition == "gaussian"
+    @test noisy_run.provenance.configuration.sigma_m == 0.1
+    @test noisy_run.public.events[1].observation.noise_model == "gaussian_additive"
+    @test noisy_run.public.protocol_settings.observation_noise_disclosed
+    @test !occursin("noise_seed", JSON3.write(Falsify.RunArtifacts._public(noisy_run.public)))
+    replay_noise = run_experiment(world, FixedDesignPolicy(), noisy_config; root=normpath(joinpath(@__DIR__, "..")))
+    @test [e.observation for e in replay_noise.public.events] == [e.observation for e in noisy_run.public.events]
+
+    # Rejected decisions don't consume an accepted-intervention noise index.
+    reject_then_accept = SequenceClient(Ref(0), ModelRequest[])
+    rejected_noise_run = run_experiment(world, ScientistPolicy(reject_then_accept),
+        RunConfig(2; retry_allowance=1, observation_noise=GaussianObservationNoise(0.1), noise_seed=441);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test rejected_noise_run.public.events[2].validation_valid === false
+    rejected_action = rejected_noise_run.public.events[3].requested_action
+    clean_after_reject = observe(world, to_environment_action(rejected_action))
+    expected_after_reject = apply_measurement_process(clean_after_reject,
+        GaussianObservationNoise(0.1), 441, 2)
+    @test rejected_noise_run.public.events[3].observation == expected_after_reject
 
     runrandom(seed) = run_experiment(world, RandomPolicy(seed), RunConfig(3); root=normpath(joinpath(@__DIR__, ".."))).public.events
     a, b = runrandom(81), runrandom(81)
