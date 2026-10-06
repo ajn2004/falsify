@@ -7,6 +7,12 @@ using Test
 struct TestPolicy <: AbstractPolicy end
 Falsify.next_action(::TestPolicy, ::PublicState) = ExperimentAction(
     initial_displacement_m=0.1, initial_velocity_m_per_s=0.0)
+struct CountingPolicy <: AbstractPolicy
+    calls::Base.RefValue{Int}
+end
+Falsify.next_action(p::CountingPolicy, state::PublicState) = (p.calls[] += 1; ExperimentAction())
+Falsify.policy_identity(::CountingPolicy) = PolicyIdentity("counting_test")
+Falsify.policy_configuration(::CountingPolicy) = (;)
 
 @testset "Falsify package bootstrap" begin
     @test Base.pkgversion(Falsify) == v"0.1.0"
@@ -39,12 +45,18 @@ function Falsify.request(client::FakeModelClient, request::ModelRequest)
     ModelResponse(client.content; metadata=ModelMetadata(provider="mock", model="fixed"))
 end
 
+struct MalformedWithMetadata <: AbstractModelClient end
+Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-json";
+    metadata=ModelMetadata(provider="mock", model="malformed", request_id="request-42",
+        input_tokens=17, output_tokens=3, latency_s=0.25, cost=0.004))
+
 @testset "provider-independent scientist policy" begin
     world = generate_world(7123; config=OscillatorConfig(1.0, 3))
     limits = limits_for(public_task(world))
     action0 = ExperimentAction(initial_displacement_m=0.25, initial_velocity_m_per_s=-0.1)
     observation = Observation((Measurement(0.0, 0.25, nothing), Measurement(0.5, 0.1, nothing)), nothing, nothing)
-    state = PublicState(policy_task(public_task(world)), limits, ((action0, observation),), 4)
+    prior = DecisionHistoryEntry(action0, true, :accepted, true, observation, nothing, 4)
+    state = PublicState(policy_task(public_task(world)), limits, (prior,), 4)
     good = """{"initial_displacement_m":0.5,"initial_velocity_m_per_s":0.2,"drive_acceleration_m_per_s2":0.0,"drive_frequency_hz":0.0}"""
     captured = Ref{Union{Nothing,ModelRequest}}(nothing)
     policy = ScientistPolicy(FakeModelClient(good, false, captured))
@@ -99,6 +111,16 @@ end
     @test client_error isa PolicyFailure
     @test client_error.code == :client_failure
     @test !occursin("truth", sprint(showerror, client_error))
+    malformed = try
+        next_action(ScientistPolicy(MalformedWithMetadata()), state)
+        nothing
+    catch failure
+        failure
+    end
+    @test malformed isa PolicyFailure
+    @test malformed.code == :malformed_response
+    @test malformed.operational_metadata.request_id == "request-42"
+    @test malformed.operational_metadata.input_tokens == 17
 
     outside = """{"initial_displacement_m":99,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":0}"""
     parsed_action = next_action(ScientistPolicy(FakeModelClient(outside, false,
@@ -187,7 +209,6 @@ end
     limits = limits_for(public_task(world))
     task = policy_task(public_task(world))
     empty_state = PublicState(task, limits, (), 12)
-    state_at(history, budget=12) = PublicState(task, limits, history, budget)
     controls(action) = (action.initial_displacement_m, action.initial_velocity_m_per_s,
         action.drive_acceleration_m_per_s2, action.drive_frequency_hz)
 
@@ -213,13 +234,16 @@ end
     policy = FixedDesignPolicy()
     action0 = ExperimentAction(initial_displacement_m=0.0)
     obs_a = Observation((Measurement(0.0, -100.0, nothing),), nothing, nothing)
-    design = [next_action(policy, state_at(ntuple(_ -> (action0, obs_a), i-1), 12-i+1)) for i in 1:12]
+    previous_entry = DecisionHistoryEntry(action0, true, :accepted, true, obs_a, nothing, 11)
+    design = [next_action(policy, PublicState(task, limits,
+        ntuple(_ -> previous_entry, i-1), 12-i+1)) for i in 1:12]
     @test all(a -> validate_action(a, empty_state).valid, design)
     # Different measurement values at the same history length do not change the choice.
     obs_b = Observation((Measurement(0.0, 100.0, nothing),), nothing, nothing)
-    h_a = ((action0, obs_a),)
-    h_b = ((action0, obs_b),)
-    @test controls(next_action(policy, state_at(h_a))) == controls(next_action(policy, state_at(h_b)))
+    h_a = (DecisionHistoryEntry(action0, true, :accepted, true, obs_a, nothing, 11),)
+    h_b = (DecisionHistoryEntry(action0, true, :accepted, true, obs_b, nothing, 11),)
+    @test controls(next_action(policy, PublicState(task, limits, h_a, 12))) ==
+        controls(next_action(policy, PublicState(task, limits, h_b, 12)))
     @test controls.(design[1:4]) != controls.(design[5:8])
     @test controls(design[1]) == controls(design[11]) # deterministic cycling after base design
     @test controls(next_action(policy, empty_state)) == controls(design[1]) # budget-independent prefix
@@ -318,5 +342,112 @@ end
             write(io, replace(public_text, "\"schema_version\":1" => "\"schema_version\":99"))
         end
         @test_throws ArgumentError load_run(path)
+    end
+end
+
+struct SequenceClient <: AbstractModelClient
+    calls::Base.RefValue{Int}
+    requests::Vector{ModelRequest}
+end
+function Falsify.request(client::SequenceClient, req::ModelRequest)
+    push!(client.requests, req); client.calls[] += 1
+    bodies = ["""{"initial_displacement_m":0.2,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":0}""",
+        """{"initial_displacement_m":0.2,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":1}""",
+        """{"initial_displacement_m":0.3,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":0}"""]
+    ModelResponse(bodies[min(client.calls[], length(bodies))]; metadata=ModelMetadata(provider="mock", model="deterministic", request_id="r$(client.calls[])", input_tokens=4))
+end
+
+@testset "deterministic complete run controller" begin
+    world = generate_world(9182; config=OscillatorConfig(1.0, 5))
+    fixed = run_experiment(world, FixedDesignPolicy(), RunConfig(2); root=normpath(joinpath(@__DIR__, "..")))
+    @test fixed.public.status == "completed"
+    @test fixed.public.terminal.interventions_used == 2
+    @test fixed.public.terminal.decision_opportunities_used == 2
+    @test length(fixed.public.events) == 2
+
+    runrandom(seed) = run_experiment(world, RandomPolicy(seed), RunConfig(3); root=normpath(joinpath(@__DIR__, ".."))).public.events
+    a, b = runrandom(81), runrandom(81)
+    controls(events) = [(e.requested_action, e.observation) for e in events]
+    @test controls(a) == controls(b)
+    @test controls(a) != controls(runrandom(82))
+    random_outcome = run_experiment(world, RandomPolicy(81), RunConfig(1);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test random_outcome.provenance.policy_seed == 81
+
+    client = SequenceClient(Ref(0), ModelRequest[])
+    outcome = run_experiment(world, ScientistPolicy(client), RunConfig(2; retry_allowance=1);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test outcome.public.status == "completed"
+    @test outcome.public.terminal.interventions_used == 2
+    @test outcome.public.terminal.decision_opportunities_used == 3
+    @test outcome.public.terminal.invalid_action_count == 1
+    @test outcome.public.events[2].validation_code == "invalid_drive"
+    @test !outcome.public.events[2].consumed_intervention
+    @test outcome.public.events[2].remaining_budget == 1
+    @test client.requests[3].history[2].validation_code == "invalid_drive"
+    @test client.requests[3].history[2].remaining_budget == 1
+    @test outcome.public.events[1].operational_metadata.provider == "mock"
+    @test all(e -> e.status == "running", outcome.public.events[1:end-1])
+    @test outcome.public.events[end].status == outcome.public.terminal.status
+
+    failureclient = FakeModelClient("", true, Ref{Union{Nothing,ModelRequest}}(nothing))
+    failure = run_experiment(world, ScientistPolicy(failureclient), RunConfig(2); root=normpath(joinpath(@__DIR__, "..")))
+    @test failure.public.status == "failed"
+    @test failure.public.terminal.decision_opportunities_used == 1
+    @test failure.public.terminal.interventions_used == 0
+    @test failure.public.events[1].failure.code == "client_failure"
+    @test failure.public.events[end].status == failure.public.terminal.status
+    malformed_run = run_experiment(world, ScientistPolicy(MalformedWithMetadata()), RunConfig(2);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test malformed_run.public.events[1].failure.code == "malformed_response"
+    @test malformed_run.public.events[1].operational_metadata.request_id == "request-42"
+    @test malformed_run.public.events[1].operational_metadata.input_tokens == 17
+    @test !occursin("private provider", JSON3.write(Falsify.RunArtifacts._public(failure.public)))
+
+    counter = Ref(0)
+    limited = run_experiment(world, CountingPolicy(counter), RunConfig(4; max_decision_opportunities=2);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test counter[] == 2
+    @test limited.public.status == "failed"
+    @test limited.public.terminal.decision_opportunities_used == 2
+    zero = run_experiment(world, CountingPolicy(counter), RunConfig(0); root=normpath(joinpath(@__DIR__, "..")))
+    @test counter[] == 2
+    @test zero.public.status == "completed"
+
+    mktempdir() do dir
+        path = write_run(dir, outcome.public, outcome.provenance, outcome.evaluator)
+        loaded = load_run(path)
+        @test loaded.public.run_id == loaded.provenance.run_id == loaded.evaluator.run_id
+        loaded_actions = [(e.requested_action.initial_displacement_m, e.requested_action.initial_velocity_m_per_s,
+            e.requested_action.drive_acceleration_m_per_s2, e.requested_action.drive_frequency_hz) for e in loaded.public.events]
+        original_actions = [(e.requested_action.initial_displacement_m, e.requested_action.initial_velocity_m_per_s,
+            e.requested_action.drive_acceleration_m_per_s2, e.requested_action.drive_frequency_hz) for e in outcome.public.events]
+        @test loaded_actions == original_actions
+        for (loaded_event, original_event) in zip(loaded.public.events, outcome.public.events)
+            @test (loaded_event.observation === nothing) == (original_event.observation === nothing)
+            if original_event.observation !== nothing
+                loaded_values = [m.displacement_m for m in loaded_event.observation.measurements]
+                original_values = [m.displacement_m for m in original_event.observation.measurements]
+                @test loaded_values ≈ original_values atol=1e-12 rtol=1e-12
+            end
+        end
+        replay_client = SequenceClient(Ref(0), ModelRequest[])
+        replay = run_experiment(generate_world(loaded.provenance.world_seed; config=OscillatorConfig(1.0, 5)),
+            ScientistPolicy(replay_client), RunConfig(2; retry_allowance=1); root=normpath(joinpath(@__DIR__, "..")))
+        @test [(e.requested_action, e.validation_code) for e in replay.public.events] ==
+            [(e.requested_action, e.validation_code) for e in outcome.public.events]
+        for (a_event, b_event) in zip(replay.public.events, outcome.public.events)
+            a_event.observation === nothing && continue
+            @test [m.displacement_m for m in a_event.observation.measurements] ≈
+                [m.displacement_m for m in b_event.observation.measurements] atol=1e-12 rtol=1e-12
+        end
+        text = read(joinpath(path, "public.json"), String)
+        for protected in ("damping_ratio", "natural_frequency", "world_seed", "condition_id", "solver", "provenance", "advisor")
+            @test !occursin(protected, text)
+        end
+        @test !hasfield(PublicState, :world)
+        @test !hasfield(PublicState, :provenance)
+        @test !hasfield(PublicState, :advisor_context)
+        @test validate_run_events(outcome.public.events, 2, outcome.public.terminal)
     end
 end

@@ -51,10 +51,14 @@ evaluator data are not fields of this contract.
 ## Shared policy boundary
 
 All policies implement `next_action(policy::AbstractPolicy, state::PublicState)`
-and return the same `ExperimentAction`; random, fixed/grid, active-design, and
-LLM policies receive the same allowlisted state. History and measurement
-collections use immutable tuples so policies cannot mutate run-controller
-records through shared references. `PublicState` contains no advisor field or
+and return the same `ExperimentAction`; the run controller invokes the common
+`next_decision` wrapper, which can additionally capture optional operational
+metadata without changing the action contract. Random, fixed/grid, active-
+design, and LLM policies receive the same allowlisted state. Public history is
+an immutable tuple of decision entries and includes accepted observations,
+rejected actions, safe failure codes, intervention use, and remaining budget.
+History and measurement collections use immutable tuples so policies cannot
+mutate run-controller records through shared references. `PublicState` contains no advisor field or
 advisor data. A future advisor is inserted outside the primary policy-visible
 state, at the decision boundary, as a distinct V0.3 intervention. The fixed
 schedule and action controls are visible through the public limits.

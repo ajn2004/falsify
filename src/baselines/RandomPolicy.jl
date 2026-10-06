@@ -47,4 +47,5 @@ function next_action(policy::RandomPolicy, state::PublicState)
 end
 
 policy_identity(::RandomPolicy) = PolicyIdentity("random", version="v0")
+policy_seed(policy::RandomPolicy) = policy.seed
 policy_configuration(policy::RandomPolicy) = (; seed=policy.seed, driven_probability=policy.driven_probability)
