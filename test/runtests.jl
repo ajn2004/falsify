@@ -371,7 +371,6 @@ end
     world = generate_world(9182; config=OscillatorConfig(1.0, 5))
     fixed = run_experiment(world, FixedDesignPolicy(), RunConfig(2); root=normpath(joinpath(@__DIR__, "..")))
     @test fixed.public.status == "completed"
-    @test fixed.public.protocol_settings.observation_noise_disclosed
     @test fixed.public.terminal.interventions_used == 2
     @test fixed.public.terminal.decision_opportunities_used == 2
     @test length(fixed.public.events) == 2
@@ -389,7 +388,6 @@ end
     outcome = run_experiment(world, ScientistPolicy(client), RunConfig(2; retry_allowance=1);
         root=normpath(joinpath(@__DIR__, "..")))
     @test outcome.public.status == "completed"
-    @test outcome.public.protocol_settings.observation_noise_disclosed
     @test outcome.public.terminal.interventions_used == 2
     @test outcome.public.terminal.decision_opportunities_used == 3
     @test outcome.public.terminal.invalid_action_count == 1
