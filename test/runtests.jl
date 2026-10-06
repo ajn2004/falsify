@@ -1,6 +1,8 @@
 using Falsify
 using JSON3
+using HTTP
 using Random
+using SHA
 using TOML
 using Test
 
@@ -77,6 +79,7 @@ Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-js
     @test req.prompt_version == PROMPT_VERSION
     @test req.task_description == state.task.model_description
     @test req.remaining_intervention_budget == 4
+    @test req.remaining_decision_opportunities == typemax(Int)
     @test occursin("For an unforced experiment, set both drive_acceleration_m_per_s2 and drive_frequency_hz to 0.", req.system_instruction)
     @test occursin("For a driven experiment, drive_acceleration_m_per_s2 must be nonzero and drive_frequency_hz must be strictly positive.", req.system_instruction)
     @test req.limits.initial_displacement_m == limits.displacement_m
@@ -92,7 +95,7 @@ Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-js
     @test !occursin("advisor", serialized)
     @test !occursin(string(metadata(world).world_seed), serialized)
     @test fieldnames(ModelRequest) == (:prompt_version, :system_instruction, :task_description,
-        :limits, :remaining_intervention_budget, :history)
+        :limits, :remaining_intervention_budget, :remaining_decision_opportunities, :history)
     @test !hasfield(ModelRequest, :world)
     @test !hasfield(ModelRequest, :provenance)
     @test model_request(state) == model_request(state)
@@ -138,6 +141,90 @@ Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-js
     @test parsed_action.initial_displacement_m == 99
     @test validate_action(parsed_action, state).code == :out_of_bounds
     @test validate_action(expected, state).valid
+end
+
+@testset "OpenRouter adapter contract" begin
+    cfg = load_openrouter_config(joinpath(@__DIR__, "..", "configs", "v0.1-frontier.toml"))
+    @test cfg.model == "openai/gpt-6.1-sol"
+    @test cfg.provider_order == ["openai"]
+    @test !cfg.allow_fallbacks
+    world = generate_world(912; config=OscillatorConfig(1.0, 3))
+    limits = limits_for(public_task(world))
+    state = PublicState(policy_task(public_task(world)), limits, (), 8, 16)
+    req = model_request(state)
+    calls = Ref(0)
+    captured = Ref{Any}(nothing)
+    response_body = JSON3.write((id="req-abc", model="openai/gpt-6.1-sol-20260929",
+        openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-6.1-sol", selected=true)], total=1),),
+        choices=[(finish_reason="stop", message=(content="""{"initial_displacement_m":0.5,"initial_velocity_m_per_s":0.1,"drive_acceleration_m_per_s2":0.0,"drive_frequency_hz":0.0}""",))],
+        usage=(prompt_tokens=22, completion_tokens=9, cost=0.0003)))
+    fake_transport = function(url, headers, body)
+        calls[] += 1
+        captured[] = (url=url, headers=headers, body=body)
+        HTTP.Response(200, ["content-type"=>"application/json"], response_body)
+    end
+    client = OpenRouterClient(cfg; transport=fake_transport, key_getter=()->"secret-test-key")
+    policy = ScientistPolicy(client)
+    decision = Falsify.next_decision(policy, state)
+    @test decision.action == ExperimentAction(initial_displacement_m=0.5, initial_velocity_m_per_s=0.1)
+    @test decision.operational_metadata.request_id == "req-abc"
+    @test decision.operational_metadata.model == "openai/gpt-6.1-sol-20260929"
+    @test decision.operational_metadata.gateway == "openrouter"
+    @test decision.operational_metadata.provider == "OpenAI Flex"
+    treatment = policy_configuration(client)
+    @test treatment.provider_only == ["openai"]
+    @test treatment.require_parameters
+    @test treatment.response_format == "strict_json_schema"
+    @test decision.operational_metadata.input_tokens == 22
+    @test decision.operational_metadata.output_tokens == 9
+    @test decision.operational_metadata.cost == 0.0003
+    @test decision.operational_metadata.finish_reason == "stop"
+    @test decision.operational_metadata.latency_s >= 0
+    @test decision.operational_metadata.request_sha256 == bytes2hex(sha256(captured[].body))
+    @test calls[] == 1
+    outbound = JSON3.read(captured[].body)
+    @test outbound.model == cfg.model
+    @test outbound.provider.order == ["openai"]
+    @test outbound.provider.only == ["openai"]
+    @test outbound.provider.allow_fallbacks == false
+    @test outbound.provider.require_parameters == true
+    @test outbound.max_completion_tokens == cfg.max_completion_tokens
+    @test !haskey(outbound, :max_tokens)
+    @test outbound.usage.include == true
+    @test outbound.reasoning.effort == "medium"
+    @test any(p -> p.first == "X-OpenRouter-Metadata" && p.second == "enabled", captured[].headers)
+    @test outbound.response_format.json_schema.strict == true
+    @test Set(String.(keys(outbound.response_format.json_schema.schema.properties))) == Set((
+        "initial_displacement_m", "initial_velocity_m_per_s", "drive_acceleration_m_per_s2", "drive_frequency_hz"))
+    @test outbound.response_format.json_schema.schema.additionalProperties == false
+    @test occursin("remaining_decision_opportunities", captured[].body)
+    for forbidden in ("world", "truth", "seed", "evaluator", "provenance", "solver", "held_out", "metric")
+        @test !occursin(forbidden, lowercase(captured[].body))
+    end
+    @test !occursin("secret-test-key", captured[].body)
+    @test !occursin("secret-test-key", sprint(showerror, PolicyFailure(:provider_unavailable)))
+    @test !occursin("secret-test-key", JSON3.write(Falsify.RunArtifacts._public(
+        run_experiment(world, ScientistPolicy(OpenRouterClient(cfg; transport=fake_transport,
+            key_getter=()->"secret-test-key")), RunConfig(1)).public)))
+
+    failures = Ref(0)
+    error_body = JSON3.write((error=(message="diagnostic must not persist",), openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-6.1-sol", selected=true)], total=1),)))
+    failing = OpenRouterClient(cfg; key_getter=()->"secret", transport=(args...)->begin
+        failures[] += 1
+        HTTP.Response(429, error_body)
+    end)
+    failure = try request(failing, req); nothing catch e; e end
+    @test failure isa PolicyFailure
+    @test failure.code == :rate_limited
+    @test failure.operational_metadata.gateway == "openrouter"
+    @test failure.operational_metadata.http_status == 429
+    @test failure.operational_metadata.provider == "OpenAI Flex"
+    @test !occursin("diagnostic", JSON3.write(failure.operational_metadata))
+    @test failure.operational_metadata.request_sha256 !== nothing
+    @test failures[] == 1
+    missing_key = try request(OpenRouterClient(cfg; key_getter=()->"", transport=fake_transport), req); nothing catch e; e end
+    @test missing_key isa PolicyFailure
+    @test missing_key.code == :configuration_failure
 end
 
 @testset "Hidden damped oscillator" begin
@@ -457,6 +544,8 @@ end
     @test outcome.public.events[2].remaining_budget == 1
     @test client.requests[3].history[2].validation_code == "invalid_drive"
     @test client.requests[3].history[2].remaining_budget == 1
+    @test client.requests[1].remaining_decision_opportunities == 3
+    @test client.requests[3].remaining_decision_opportunities == 1
     @test outcome.public.events[1].operational_metadata.provider == "mock"
     @test all(e -> e.status == "running", outcome.public.events[1:end-1])
     @test outcome.public.events[end].status == outcome.public.terminal.status

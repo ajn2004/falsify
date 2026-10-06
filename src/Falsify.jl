@@ -5,6 +5,7 @@ using OrdinaryDiffEqTsit5: Tsit5
 using Random: MersenneTwister, rand, randn
 using SciMLBase: ODEProblem, solve
 using JSON3
+using SHA
 
 export OscillatorConfig, OscillatorExperiment, CleanOscillatorObservation,
        OscillatorTaskDescription, OscillatorMetadata, OscillatorWorld,
@@ -210,7 +211,9 @@ struct PublicState
     limits::ActionLimits
     history::Tuple{Vararg{DecisionHistoryEntry}}
     remaining_budget::Int
+    remaining_decision_opportunities::Int
 end
+PublicState(task, limits, history, remaining_budget) = PublicState(task, limits, history, remaining_budget, typemax(Int))
 limits_for(task::OscillatorTaskDescription) = ActionLimits(
     displacement_m=task.displacement_bounds, velocity_m_per_s=task.velocity_bounds,
     drive_acceleration_m_per_s2=task.drive_acceleration_bounds_m_per_s2,
@@ -242,6 +245,7 @@ function next_action(::AbstractPolicy, ::PublicState)
 end
 """Uniform policy-call value with optional provider-neutral operational metadata."""
 Base.@kwdef struct OperationalMetadata
+    gateway::Union{Nothing,String}=nothing
     provider::Union{Nothing,String}=nothing
     model::Union{Nothing,String}=nothing
     request_id::Union{Nothing,String}=nothing
@@ -250,6 +254,8 @@ Base.@kwdef struct OperationalMetadata
     latency_s::Union{Nothing,Float64}=nothing
     cost::Union{Nothing,Float64}=nothing
     finish_reason::Union{Nothing,String}=nothing
+    request_sha256::Union{Nothing,String}=nothing
+    http_status::Union{Nothing,Int}=nothing
 end
 struct PolicyDecision
     action::ExperimentAction
@@ -298,8 +304,8 @@ export RandomPolicy, FixedDesignPolicy, policy_identity, policy_configuration
 
 include("agents/ScientistPolicy.jl")
 using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
-    RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-     ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+     RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
+      ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
        ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
@@ -315,4 +321,11 @@ include("evaluation/SystemIdentification.jl")
 include("evaluation/Metrics.jl")
 using .Metrics: RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
 export RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
+
+include("providers/OpenRouterClient.jl")
+using .OpenRouterIntegration: OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config
+export OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config
+policy_configuration(policy::ScientistPolicy{<:OpenRouterClient}) = merge(
+    (prompt_version=PROMPT_VERSION, prompt_sha256=bytes2hex(SHA.sha256(SCIENTIST_PROMPT)),),
+    OpenRouterIntegration.policy_configuration(policy.client))
 end

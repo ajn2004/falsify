@@ -1,0 +1,7 @@
+model = "openai/gpt-6.1-sol"
+provider_order = ["openai"]
+allow_fallbacks = false
+max_completion_tokens = 512
+reasoning_effort = "medium"
+prompt_version = "scientist-v0-1"
+schema_version = "experiment-action-v1"
