@@ -13,6 +13,16 @@ end
 Falsify.next_action(p::CountingPolicy, state::PublicState) = (p.calls[] += 1; ExperimentAction())
 Falsify.policy_identity(::CountingPolicy) = PolicyIdentity("counting_test")
 Falsify.policy_configuration(::CountingPolicy) = (;)
+struct SevenThenFail <: AbstractPolicy
+    calls::Base.RefValue{Int}
+end
+function Falsify.next_action(p::SevenThenFail, state::PublicState)
+    p.calls[] += 1
+    p.calls[] <= 7 || throw(PolicyFailure(:malformed_response))
+    Falsify.next_action(FixedDesignPolicy(), state)
+end
+Falsify.policy_identity(::SevenThenFail) = PolicyIdentity("seven_then_fail")
+Falsify.policy_configuration(::SevenThenFail) = (;)
 
 @testset "Falsify package bootstrap" begin
     @test Base.pkgversion(Falsify) == v"0.1.0"
@@ -449,5 +459,91 @@ end
         @test !hasfield(PublicState, :provenance)
         @test !hasfield(PublicState, :advisor_context)
         @test validate_run_events(outcome.public.events, 2, outcome.public.terminal)
+    end
+end
+
+@testset "persisted evaluator scientific metrics" begin
+    world = generate_world(411; config=OscillatorConfig(10.0, 101))
+    actions = (
+        ExperimentAction(initial_displacement_m=1.0),
+        ExperimentAction(initial_displacement_m=0.0, initial_velocity_m_per_s=1.0),
+        ExperimentAction(initial_displacement_m=0.0, drive_acceleration_m_per_s2=0.5,
+            drive_frequency_hz=0.75),
+    )
+    evidence = [(a, policy_observation(observe(world, to_environment_action(a)))) for a in actions]
+    fit = Falsify.SystemIdentification.fit_oscillator(evidence)
+    truth = evaluator_truth(world)
+    @test fit.status == :success
+    @test fit.zeta ≈ truth.damping_ratio atol=2e-5
+    @test fit.omega0 ≈ truth.natural_frequency atol=2e-5
+    @test Falsify.SystemIdentification.fit_oscillator(Tuple[]).status == :insufficient_evidence
+    single_fit = Falsify.SystemIdentification.fit_oscillator(evidence[1:1])
+    alternate_world = generate_world(412; config=OscillatorConfig(10.0, 101))
+    contradictory = (actions[1], policy_observation(observe(alternate_world, to_environment_action(actions[1]))))
+    combined_fit = Falsify.SystemIdentification.fit_oscillator((evidence[1], contradictory))
+    @test abs(combined_fit.zeta-single_fit.zeta) + abs(combined_fit.omega0-single_fit.omega0) > 1e-3
+
+    # Exact noiseless evidence gives near-zero held-out error and parameter error.
+    outcome = run_experiment(world, FixedDesignPolicy(), RunConfig(8))
+    mktempdir() do dir
+        path = write_run(dir, outcome.public, outcome.provenance, outcome.evaluator)
+        metrics = score_run(path)
+        @test metrics.fit_status == :success
+        @test metrics.parameter_error < 1e-4
+        @test metrics.raw_heldout_rmse_m < 1e-4
+        @test metrics.heldout_prediction_error < 1e-4
+        @test metrics.success
+        @test metrics.interventions_used == 8
+        @test metrics.decision_opportunities_used == 8
+        @test score_run(load_run(path)).parameter_error == metrics.parameter_error
+
+        # Policy identity is metadata only: renamed policy with identical evidence scores identically.
+        public_text = read(joinpath(path, "public.json"), String)
+        renamed_text = replace(public_text, "\"name\":\"fixed_design\"" => "\"name\":\"different_policy\"")
+        other_root = joinpath(dir, "renamed")
+        mkpath(other_root)
+        other_path = joinpath(other_root, outcome.public.run_id)
+        mkpath(other_path)
+        for filename in ("provenance.json", "evaluator.json")
+            cp(joinpath(path, filename), joinpath(other_path, filename))
+        end
+        write(joinpath(other_path, "public.json"), renamed_text)
+        @test score_run(other_path).parameter_error == metrics.parameter_error
+    end
+
+    # A deliberately displaced estimate worsens both normalized physical errors.
+    zeta, omega = truth.damping_ratio, truth.natural_frequency
+    exact = sqrt(((0.0/0.35)^2 + (0.0/1.2)^2)/2)
+    displaced = sqrt((((zeta+0.05-zeta)/0.35)^2 + ((omega+0.2-omega)/1.2)^2)/2)
+    @test displaced > exact
+    @test displaced/(1+displaced) > exact/(1+exact)
+
+    # Zero-observation behavioral failure remains finite and maximally bad.
+    failed = run_experiment(world, ScientistPolicy(MalformedWithMetadata()), RunConfig(8))
+    mktempdir() do dir
+        path = write_run(dir, failed.public, failed.provenance, failed.evaluator)
+        metrics = score_run(path)
+        @test metrics.fit_status == :insufficient_evidence
+        @test metrics.parameter_error == 1.0
+        @test metrics.heldout_prediction_error == 1.0
+        @test isfinite(metrics.parameter_error) && isfinite(metrics.heldout_prediction_error)
+        @test !metrics.success
+        @test metrics.completion_status == "failed"
+        @test metrics.model_calls == 1
+        @test metrics.input_tokens == 17
+        @test metrics.estimated_cost == 0.004
+    end
+
+    # Good partial evidence does not rescue a behaviorally failed run.
+    partial_failure = run_experiment(world, SevenThenFail(Ref(0)), RunConfig(8))
+    mktempdir() do dir
+        path = write_run(dir, partial_failure.public, partial_failure.provenance, partial_failure.evaluator)
+        metrics = score_run(path)
+        @test metrics.fit_status == :success
+        @test metrics.fit_objective_m2 !== nothing
+        @test metrics.parameter_error == 1.0
+        @test metrics.heldout_prediction_error == 1.0
+        @test !metrics.success
+        @test metrics.completion_status == "failed"
     end
 end

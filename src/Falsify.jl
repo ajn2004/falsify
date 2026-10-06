@@ -278,4 +278,9 @@ policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, prov
 include("protocol/RunController.jl")
 using .RunController: RunConfig, RunOutcome, run_experiment, validate_run_events
 export RunConfig, RunOutcome, run_experiment, validate_run_events
+
+include("evaluation/SystemIdentification.jl")
+include("evaluation/Metrics.jl")
+using .Metrics: RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
+export RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
 end
