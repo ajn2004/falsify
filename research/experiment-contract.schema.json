@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falsify.invalid/schemas/experiment-action-v1.json",
+  "title": "Falsify policy-facing experiment action",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["initial_displacement_m", "initial_velocity_m_per_s", "drive_acceleration_m_per_s2", "drive_frequency_hz"],
+  "properties": {
+    "initial_displacement_m": {"type": "number"},
+    "initial_velocity_m_per_s": {"type": "number"},
+    "drive_acceleration_m_per_s2": {"type": "number"},
+    "drive_frequency_hz": {"type": "number", "minimum": 0}
+  }
+}

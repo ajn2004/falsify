@@ -3,6 +3,10 @@ using Random
 using TOML
 using Test
 
+struct TestPolicy <: AbstractPolicy end
+Falsify.next_action(::TestPolicy, ::PublicState) = ExperimentAction(
+    initial_displacement_m=0.1, initial_velocity_m_per_s=0.0)
+
 @testset "Falsify package bootstrap" begin
     @test Base.pkgversion(Falsify) == v"0.1.0"
 
@@ -58,5 +62,41 @@ end
     @test !(:truth in fieldnames(typeof(task)))
     @test !(:world_seed in fieldnames(typeof(task)))
     @test !occursin(string(metadata(world_a).world_seed), sprint(show, task))
+    @test policy_task(task) == TaskDescription(task.model_description)
+    @test fieldnames(typeof(policy_task(task))) == (:model_description,)
     @test_throws ArgumentError observe(world_a, OscillatorExperiment(drive_acceleration_m_per_s2=2.0))
+end
+@testset "experiment and observation contract" begin
+    world = generate_world(481; config=OscillatorConfig(1.0, 11))
+    task = public_task(world)
+    limits = limits_for(task)
+    public_description = policy_task(task)
+    state = PublicState(public_description, limits, (), 2)
+    valid = ExperimentAction(initial_displacement_m=0.1, initial_velocity_m_per_s=0.0)
+    @test validate_action(valid, state) == ValidationResult(true, :accepted)
+    @test validate_action(ExperimentAction(initial_displacement_m=2.1,
+        initial_velocity_m_per_s=0.0), state).code == :out_of_bounds
+    @test validate_action(ExperimentAction(initial_displacement_m=0.0,
+        initial_velocity_m_per_s=0.0, drive_acceleration_m_per_s2=-0.2,
+        drive_frequency_hz=1.0), state).valid
+    exhausted = PublicState(public_description, limits, (), 0)
+    @test validate_action(valid, exhausted) == ValidationResult(false, :budget_exhausted)
+    @test !hasfield(PublicState, :advisor_context)
+    @test fieldtype(PublicState, :history) <: Tuple
+    @test fieldtype(Observation, :measurements) <: Tuple
+    @test hasfield(Observation, :noise_scale_m)
+    @test !hasfield(Observation, :noise_scale)
+    @test fieldtype(PublicState, :task) === TaskDescription
+    @test !hasfield(TaskDescription, :final_time)
+    @test ExperimentAction !== OscillatorExperiment
+    @test to_environment_action(valid) isa OscillatorExperiment
+    @test to_environment_action(valid).initial_displacement == valid.initial_displacement_m
+    @test_throws ArgumentError ActionLimits(displacement_m=(2.0, 1.0), velocity_m_per_s=(-1.0, 1.0),
+        drive_acceleration_m_per_s2=(-1.0, 1.0), drive_frequency_hz=(0.0, 3.0),
+        duration_s=1.0, cadence_s=0.1, max_samples=11)
+    @test next_action(TestPolicy(), state).initial_displacement_m == valid.initial_displacement_m
+    obs = policy_observation(observe(world, to_environment_action(valid)))
+    @test length(obs.measurements) == task.sample_count
+    @test obs.noise_model === nothing
+    @test obs.noise_scale_m === nothing
 end
