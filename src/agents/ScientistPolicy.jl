@@ -12,7 +12,6 @@ abstract type AbstractModelClient end
 
 """Optional provider-neutral operational metadata; absent values are `nothing`."""
 Base.@kwdef struct ModelMetadata
-    gateway::Union{Nothing,String}=nothing
     provider::Union{Nothing,String}=nothing
     model::Union{Nothing,String}=nothing
     request_id::Union{Nothing,String}=nothing
@@ -21,8 +20,6 @@ Base.@kwdef struct ModelMetadata
     latency_s::Union{Nothing,Float64}=nothing
     cost::Union{Nothing,Float64}=nothing
     finish_reason::Union{Nothing,String}=nothing
-    request_sha256::Union{Nothing,String}=nothing
-    http_status::Union{Nothing,Int}=nothing
 end
 
 struct ModelResponse
@@ -74,7 +71,6 @@ struct ModelRequest
     task_description::String
     limits::RequestLimits
     remaining_intervention_budget::Int
-    remaining_decision_opportunities::Int
     history::Tuple{Vararg{RequestHistoryEntry}}
 end
 
@@ -107,7 +103,7 @@ function model_request(state::PublicState)
             entry.observation.noise_model, entry.observation.noise_scale_m),
         entry.failure_code === nothing ? nothing : String(entry.failure_code), entry.remaining_budget) for entry in state.history)
     ModelRequest(PROMPT_VERSION, SCIENTIST_PROMPT, state.task.model_description,
-        limits, state.remaining_budget, state.remaining_decision_opportunities, history)
+        limits, state.remaining_budget, history)
 end
 
 struct ScientistPolicy{C<:AbstractModelClient} <: AbstractPolicy
@@ -155,12 +151,11 @@ function next_decision(policy::ScientistPolicy, state::PublicState)
         throw(PolicyFailure(:client_failure))
     end
     model_response isa ModelResponse || throw(PolicyFailure(:client_failure))
-    metadata = OperationalMetadata(gateway=model_response.metadata.gateway, provider=model_response.metadata.provider,
+    metadata = OperationalMetadata(provider=model_response.metadata.provider,
         model=model_response.metadata.model, request_id=model_response.metadata.request_id,
         input_tokens=model_response.metadata.input_tokens, output_tokens=model_response.metadata.output_tokens,
         latency_s=model_response.metadata.latency_s, cost=model_response.metadata.cost,
-        finish_reason=model_response.metadata.finish_reason,
-        request_sha256=model_response.metadata.request_sha256, http_status=model_response.metadata.http_status)
+        finish_reason=model_response.metadata.finish_reason)
     try
         PolicyDecision(parse_action(model_response.content), metadata)
     catch failure
