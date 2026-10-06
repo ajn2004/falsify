@@ -63,17 +63,27 @@ Manual exploratory smoke (not CI):
 OPENROUTER_API_KEY=... julia +1.12.7 --project=. scripts/openrouter_pilot.jl
 ```
 
-This uses one fixed seeded non-confirmatory world and writes normal raw
-artifacts. Do not execute confirmatory runs in DAL-122.
+This uses one fixed seeded non-confirmatory world under the primary noisy
+condition (σ = 0.10, two interventions), writes normal raw artifacts, and
+enforces the operational gate checklist recorded in
+`research/pilot-report-dal123.md` — including proof that the second request
+carried the first observation's serialized history. Do not execute
+confirmatory runs in DAL-122.
 
 ## DAL-123 lock checklist
 
-Before confirmation: run and review the manual pilot; verify this model and
-endpoint still exist and continue supporting strict structured output; resolve
-the temperature/top-p limitation (any change requires a prompt/config version
-update); freeze exact prompt text/hash, schema/request contract, generation
-settings, routing, failure/exclusion policy, budget/opportunity behavior,
-seed/repetition plan, and immutable confirmatory seeds. Confirm metadata
-capture and request reconstruction against persisted artifacts. Any model,
-provider, or routing change is an explicit protocol amendment, never an
-availability-based substitution.
+Resolved at version 3 (`falsify-v0.1-prereg-3`): the temperature/top-p
+limitation is locked as a declared treatment property (the endpoint does not
+advertise those parameters, so none are sent; provider-side defaults apply);
+OpenAI-family routing is locked with the returned serving provider recorded per
+response; prompt text/hash, `experiment-action-v1` schema, generation settings,
+failure classification (including provider-outage codes classified as
+infrastructure), budget/opportunity behavior, and the complete seed/repetition
+plan (`v0.1-confirmatory-seeds-v2`) are frozen.
+
+Still open — the live operational gate: run and review the manual pilot; verify
+the model and endpoint still exist and support strict structured output;
+confirm metadata capture (serving provider, request ID, tokens, latency, cost,
+finish_reason) and request-hash reconstruction against the persisted artifact.
+Any model, provider, or routing change is an explicit protocol amendment, never
+an availability-based substitution.

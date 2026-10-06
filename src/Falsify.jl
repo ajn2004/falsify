@@ -314,8 +314,10 @@ policy_identity(::ScientistPolicy) = PolicyIdentity("scientist", version=PROMPT_
 policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, provider_calls="injected_client")
 
 include("protocol/RunController.jl")
-using .RunController: RunConfig, RunOutcome, run_experiment, validate_run_events
-export RunConfig, RunOutcome, run_experiment, validate_run_events
+using .RunController: RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
+    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES
+export RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
+    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES
 
 include("evaluation/SystemIdentification.jl")
 include("evaluation/Metrics.jl")

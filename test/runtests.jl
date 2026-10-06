@@ -612,6 +612,152 @@ end
     end
 end
 
+struct SecondCallThrow <: AbstractPolicy
+    calls::Base.RefValue{Int}
+end
+function Falsify.next_action(p::SecondCallThrow, ::PublicState)
+    p.calls[] += 1
+    p.calls[] >= 2 && throw(ErrorException("simulated apparatus defect"))
+    ExperimentAction(initial_displacement_m=0.2)
+end
+Falsify.policy_identity(::SecondCallThrow) = PolicyIdentity("second_call_throw")
+Falsify.policy_configuration(::SecondCallThrow) = (;)
+
+struct ThrowingIdentityPolicy <: AbstractPolicy end
+Falsify.next_action(::ThrowingIdentityPolicy, ::PublicState) = ExperimentAction(initial_displacement_m=0.2)
+Falsify.policy_identity(::ThrowingIdentityPolicy) = error("identity defect")
+Falsify.policy_configuration(::ThrowingIdentityPolicy) = (;)
+
+@testset "infrastructure failure classification" begin
+    world = generate_world(9182; config=OscillatorConfig(1.0, 5))
+
+    # An unexpected (non-PolicyFailure) exception aborts the run durably,
+    # preserving the already-executed public history.
+    outcome = run_experiment(world, SecondCallThrow(Ref(0)), RunConfig(3);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test outcome.public.status == "aborted"
+    @test outcome.public.terminal.failure.code == APPARATUS_FAILURE_CODE
+    @test outcome.public.terminal.interventions_used == 1
+    @test outcome.public.terminal.decision_opportunities_used == 2
+    @test outcome.public.terminal.invalid_action_count == 0
+    @test length(outcome.public.events) == 2
+    @test outcome.public.events[2].failure.code == APPARATUS_FAILURE_CODE
+    @test outcome.public.events[2].consumed_intervention == false
+    @test outcome.evaluator.failures[1].code == APPARATUS_FAILURE_CODE
+    @test outcome.evaluator.failures[1].diagnostic == "ErrorException"
+    @test outcome.evaluator.evaluator_metadata.abort_stage == "decision"
+    mktempdir() do dir
+        path = write_run(dir, outcome.public, outcome.provenance, outcome.evaluator)
+        public_text = read(joinpath(path, "public.json"), String)
+        @test occursin("apparatus_exception", public_text)
+        @test !occursin("ErrorException", public_text)
+        @test !occursin("simulated", public_text)
+        @test occursin("ErrorException", read(joinpath(path, "evaluator.json"), String))
+        metrics = score_run(path)
+        @test metrics.run_class == "infrastructure"
+        @test isnan(metrics.parameter_error)
+        @test isnan(metrics.heldout_prediction_error)
+        @test !metrics.success
+        @test metrics.completion_status == "aborted"
+        @test metrics.interventions_used == 1
+        @test metrics.error_improvement_per_intervention === nothing
+    end
+
+    # Behavioral PolicyFailure termination is unchanged and stays behavioral.
+    mktempdir() do dir
+        ledger = joinpath(dir, "ledger.jsonl")
+        store = joinpath(dir, "raw")
+        attempt = run_attempt(world, ScientistPolicy(MalformedWithMetadata()), RunConfig(3);
+            root=normpath(joinpath(@__DIR__, "..")), artifacts_root=store,
+            ledger_path=ledger, repetition_id="rep-1", condition_id="clean")
+        @test attempt.classification == "behavioral_failure"
+        @test attempt.outcome.public.status == "failed"
+        @test attempt.artifact_dir !== nothing
+        record = JSON3.read(strip(read(ledger, String)))
+        @test record.classification == "behavioral_failure"
+        @test record.status == "failed"
+        @test record.run_id == attempt.run_id
+        @test record.condition_id == "clean"
+        @test record.noise_seed == 0
+        @test record.terminal_failure_code == "malformed_response"
+    end
+
+    # A provider outage producing no usable model response is classified
+    # infrastructure, not behavioral, at both runner and scoring levels.
+    provider_policy = ScientistPolicy(OpenRouterClient(
+        load_openrouter_config(joinpath(@__DIR__, "..", "configs", "v0.1-frontier.toml"));
+        key_getter=()->"key", transport=(args...) -> throw(ErrorException("connection reset"))))
+    attempt, record, provider_metrics = mktempdir() do dir
+        ledger = joinpath(dir, "ledger.jsonl")
+        attempt = run_attempt(world, provider_policy, RunConfig(3);
+            root=normpath(joinpath(@__DIR__, "..")),
+            artifacts_root=joinpath(dir, "raw"), ledger_path=ledger)
+        (attempt, JSON3.read(strip(read(ledger, String))),
+            score_run(attempt.artifact_dir))
+    end
+    @test attempt.outcome.public.status == "failed"
+    @test attempt.outcome.public.terminal.failure.code == "provider_unavailable"
+    @test attempt.classification == "infrastructure"
+    @test record.classification == "infrastructure"
+    @test provider_metrics.run_class == "infrastructure"
+    @test isnan(provider_metrics.parameter_error)
+    @test isnan(provider_metrics.heldout_prediction_error)
+    @test !provider_metrics.success
+
+    # An exception escaping run_experiment finalization still yields a durable
+    # aborted record and a ledger line (partial events are not finalizable).
+    mktempdir() do dir
+        ledger = joinpath(dir, "ledger.jsonl")
+        store = joinpath(dir, "raw")
+        attempt = run_attempt(world, ThrowingIdentityPolicy(), RunConfig(2);
+            root=normpath(joinpath(@__DIR__, "..")), artifacts_root=store,
+            ledger_path=ledger)
+        @test attempt.classification == "infrastructure"
+        @test attempt.outcome !== nothing
+        @test attempt.outcome.public.status == "aborted"
+        @test attempt.outcome.public.policy_identity.name == "unidentified"
+        @test isempty(attempt.outcome.public.events)
+        @test attempt.artifact_dir !== nothing
+        loaded = load_run(attempt.artifact_dir)
+        @test loaded.public.status == "aborted"
+        @test loaded.evaluator.failures[1].code == APPARATUS_FAILURE_CODE
+        @test loaded.evaluator.failures[1].diagnostic == "ErrorException"
+        @test loaded.evaluator.evaluator_metadata.unfinalized_events == true
+        record = JSON3.read(strip(read(ledger, String)))
+        @test record.classification == "infrastructure"
+        @test record.terminal_failure_code == APPARATUS_FAILURE_CODE
+    end
+
+    # Persistence failure keeps the attempt classified as infrastructure and the
+    # ledger still records it without an artifact directory.
+    mktempdir() do dir
+        blocker = joinpath(dir, "not-a-directory")
+        write(blocker, "occupied")
+        ledger = joinpath(dir, "ledger.jsonl")
+        attempt = run_attempt(world, FixedDesignPolicy(), RunConfig(1);
+            root=normpath(joinpath(@__DIR__, "..")), artifacts_root=blocker,
+            ledger_path=ledger)
+        @test attempt.outcome !== nothing
+        @test attempt.artifact_dir === nothing
+        @test attempt.classification == "infrastructure"
+        record = JSON3.read(strip(read(ledger, String)))
+        @test record.classification == "infrastructure"
+        @test record.status == "completed"
+        @test record.artifact_dir === nothing
+    end
+
+    # A clean supervised attempt records a completed classification.
+    mktempdir() do dir
+        ledger = joinpath(dir, "ledger.jsonl")
+        attempt = run_attempt(world, FixedDesignPolicy(), RunConfig(1);
+            root=normpath(joinpath(@__DIR__, "..")), artifacts_root=joinpath(dir, "raw"),
+            ledger_path=ledger)
+        @test attempt.classification == "completed"
+        @test attempt.outcome.public.status == "completed"
+        @test score_run(attempt.artifact_dir).run_class == "completed"
+    end
+end
+
 @testset "persisted evaluator scientific metrics" begin
     world = generate_world(411; config=OscillatorConfig(10.0, 101))
     actions = (

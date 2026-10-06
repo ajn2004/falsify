@@ -3,6 +3,7 @@ module Metrics
 import ..Falsify: ExperimentAction, OscillatorTruth, OscillatorWorld, OscillatorConfig,
     OscillatorMetadata, OscillatorExperiment, observe
 import ..Falsify.SystemIdentification: FitResult, fit_oscillator, predict_trace
+import ..Falsify: PROVIDER_INFRASTRUCTURE_CODES
 
 export RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
 
@@ -44,6 +45,7 @@ struct RunMetrics
     invalid_action_rate::Float64
     policy_failure_rate::Float64
     completion_status::String
+    run_class::String
     recovered_after_rejection::Union{Nothing,Bool}
     error_improvement_per_intervention::Union{Nothing,Float64}
     model_calls::Union{Nothing,Int}
@@ -99,17 +101,24 @@ function score_run(run, cfg::MetricConfig=MetricConfig())
     p, ev = loaded.public, loaded.evaluator
     fit = fit_oscillator(_fitpairs(p))
     good = fit.status == :success
-    # Infrastructure exclusions must be classified upstream (DAL-123). A run
-    # still marked failed here is a behavioral failure for confirmatory scoring.
+    # `failed` is behavioral and scores 1.0 unless its terminal code shows a
+    # provider/infrastructure fault with no usable model response. `aborted`
+    # and provider-fault runs are infrastructure records excluded from
+    # contrasts, so their endpoints are NaN, not a score.
     behaviorally_failed = p.status == "failed"
+    aborted = p.status == "aborted"
+    terminal_code = p.terminal === nothing || p.terminal.failure === nothing ?
+        nothing : String(p.terminal.failure.code)
+    infrastructure = aborted || (behaviorally_failed &&
+        terminal_code in PROVIDER_INFRASTRUCTURE_CODES)
     truth = ev.truth
     ze = good ? abs(fit.zeta-Float64(truth.damping_ratio))/(0.40-0.05) : nothing
     we = good ? abs(fit.omega0-Float64(truth.natural_frequency_rad_s))/(2.0-0.8) : nothing
     raw_parameter = good ? sqrt((ze^2+we^2)/2) : nothing
     pe_fit = good ? raw_parameter/(1+raw_parameter) : cfg.failure_parameter_score
     rawpred, pred_fit = good ? _prediction_score(p, truth, fit, cfg) : (nothing, cfg.failure_prediction_score)
-    pe = behaviorally_failed ? cfg.failure_parameter_score : pe_fit
-    pred = behaviorally_failed ? cfg.failure_prediction_score : pred_fit
+    pe = infrastructure ? NaN : behaviorally_failed ? cfg.failure_parameter_score : pe_fit
+    pred = infrastructure ? NaN : behaviorally_failed ? cfg.failure_prediction_score : pred_fit
     pred = min(pred, cfg.failure_prediction_score)
     events = collect(p.events); decisions = Int(p.terminal.decision_opportunities_used)
     interventions = Int(p.terminal.interventions_used); invalid = Int(p.terminal.invalid_action_count)
@@ -123,15 +132,17 @@ function score_run(run, cfg::MetricConfig=MetricConfig())
     calls = length(ops)
     prior_raw = sqrt((((0.225-Float64(ev.truth.damping_ratio))/0.35)^2 +
         ((1.4-Float64(ev.truth.natural_frequency_rad_s))/1.2)^2)/2)
-    improvement = good && !behaviorally_failed && interventions > 0 ?
+    improvement = good && !behaviorally_failed && !infrastructure && interventions > 0 ?
         (prior_raw/(1+prior_raw)-pe_fit)/interventions : nothing
     status = String(p.status)
+    run_class = infrastructure ? "infrastructure" :
+        behaviorally_failed ? "behavioral_failure" : status == "completed" ? "completed" : "unclassified"
     RunMetrics(String(p.run_id), String(p.policy_identity.name), fit.status, fit.objective,
         fit.evaluations, fit.zeta, fit.omega0,
-        ze, we, pe, rawpred, pred, good && pe <= cfg.success_parameter_threshold,
+        ze, we, pe, rawpred, pred, !infrastructure && good && pe <= cfg.success_parameter_threshold,
         interventions, decisions, p.intervention_budget == 0 ? 0.0 : interventions/p.intervention_budget,
         invalid, failures, decisions == 0 ? 0.0 : invalid/decisions,
-        decisions == 0 ? 0.0 : failures/decisions, status, isempty(events) ? nothing : recovery,
+        decisions == 0 ? 0.0 : failures/decisions, status, run_class, isempty(events) ? nothing : recovery,
         improvement, calls, sumfield(:input_tokens), sumfield(:output_tokens),
         sumfloat(:latency_s), isempty(elapsed) ? nothing : sum(elapsed), sumfloat(:cost),
         first_nonmissing(:provider), first_nonmissing(:model))

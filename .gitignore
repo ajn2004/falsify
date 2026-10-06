@@ -1,2 +1,6 @@
 # Generated output from the disposable package-bootstrap smoke command.
 /results/raw/bootstrap-smoke.toml
+
+# Local credentials and environment overrides; keys are injected via env vars.
+.env
+.env.*

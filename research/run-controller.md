@@ -15,12 +15,37 @@ engineering default is `max_decision_opportunities = intervention_budget +
 retry_allowance`, with `retry_allowance` defaulting to the intervention budget.
 Invalid actions are public events, have no observation, retain the budget, and
 are never replaced automatically. A `PolicyFailure` becomes a sanitized public
-failure and terminates the run. Unexpected Julia exceptions propagate.
+failure and terminates the run. Unexpected Julia exceptions abort the run (see
+below); they no longer propagate out of the decision loop.
 
 When the intervention budget is reached, status is `completed`. Exhausting
 decision opportunities with interventions remaining is `failed`; a typed
 policy failure is also `failed`. A zero intervention budget completes without
 calling the policy. Terminal counts are derived from and checked against events.
+
+## Abort and supervision (DAL-123)
+
+An unexpected exception — anything that is not a typed `PolicyFailure` from the
+policy call, or any fault inside action validation, `observe`, or the
+measurement process — aborts the run: it terminates as `aborted` with public
+failure code `apparatus_exception`, preserving the executed event history. The
+exception type name (never its message) is recorded as an evaluator-side
+`EvaluatorFailure` diagnostic; nothing exception-derived enters the public
+artifact beyond the stable code. `aborted` is never a policy outcome and is
+always classified `infrastructure`.
+
+`run_attempt(world, policy, config; artifacts_root, ledger_path, ...)` is the
+supervised entry point for benchmark execution. It runs `run_experiment`,
+persists artifacts when possible, and appends one JSON-lines record to the run
+ledger for every attempt — including attempts where `run_experiment` escapes
+during finalization (a durable `aborted` record with `unfinalized_events` is
+written) or where persistence itself fails (the ledger line remains the last
+resort record). The per-attempt `classification` is `completed`,
+`behavioral_failure`, or `infrastructure`; a `failed` run is `infrastructure`
+when its terminal failure code is a provider/transport fault
+(`PROVIDER_INFRASTRUCTURE_CODES`), i.e., no usable model response existed. The
+confirmatory runner for DAL-124 must execute through `run_attempt` so that no
+attempt can vanish without an auditable record.
 
 `DecisionHistoryEntry` is the common public history: requested action,
 validation code, intervention consumption, returned observation, safe failure
