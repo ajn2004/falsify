@@ -14,9 +14,10 @@ remaining intervention budget; and ordered prior action/observation pairs.
 Observations contain only sampled times, displacements, optional measurement
 uncertainties, and optional publicly declared noise model/scale. The present
 `PublicState` history contract contains only accepted action/observation pairs,
-so this request cannot represent rejected attempts or public failure outcomes;
-that would require an explicit DAL-114 contract extension rather than guessing
-status here.
+so this request cannot represent rejected attempts or public failure outcomes.
+DAL-118 extends the shared history contract with public decision entries;
+scientist requests project the same entries, including safe validation/failure
+codes and post-event budget, without evaluator diagnostics.
 
 No world, truth, seed, condition, evaluator/provenance data, solver details,
 unsampled trajectory, or advisor context is accepted by the request DTO. The

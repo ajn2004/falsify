@@ -122,7 +122,8 @@ function observe(world::OscillatorWorld, action::OscillatorExperiment)
     CleanOscillatorObservation(times, Float64[point[1] for point in solution.u])
 end
 export ExperimentAction, to_environment_action, Measurement, Observation, PublicState, ActionLimits,
-       TaskDescription, policy_task, ValidationResult, validate_action, AbstractPolicy, next_action, limits_for, policy_observation
+       TaskDescription, policy_task, ValidationResult, validate_action, AbstractPolicy, next_action, limits_for, policy_observation,
+       DecisionHistoryEntry, PolicyDecision, next_decision
 
 """Policy-facing oscillator controls, with SI units explicit in field names."""
 Base.@kwdef struct ExperimentAction
@@ -178,11 +179,30 @@ struct TaskDescription
     model_description::String
 end
 policy_task(task::OscillatorTaskDescription) = TaskDescription(task.model_description)
+"""One policy-visible decision, including rejected attempts and safe failures."""
+struct DecisionHistoryEntry
+    requested_action::Union{Nothing,ExperimentAction}
+    validation_valid::Union{Nothing,Bool}
+    validation_code::Union{Nothing,Symbol}
+    consumed_intervention::Bool
+    observation::Union{Nothing,Observation}
+    failure_code::Union{Nothing,Symbol}
+    remaining_budget::Int
+end
+
 struct PublicState
     task::TaskDescription
     limits::ActionLimits
-    history::Tuple{Vararg{Tuple{ExperimentAction,Observation}}}
+    history::Tuple{Vararg{DecisionHistoryEntry}}
     remaining_budget::Int
+end
+function PublicState(task::TaskDescription, limits::ActionLimits, history::Tuple, budget::Integer)
+    entries = if isempty(history) || first(history) isa DecisionHistoryEntry
+        history
+    else
+        Tuple(DecisionHistoryEntry(a, true, :accepted, true, o, nothing, Int(budget)-i) for (i,(a,o)) in enumerate(history))
+    end
+    PublicState(task, limits, entries, Int(budget))
 end
 limits_for(task::OscillatorTaskDescription) = ActionLimits(
     displacement_m=task.displacement_bounds, velocity_m_per_s=task.velocity_bounds,
@@ -196,6 +216,12 @@ abstract type AbstractPolicy end
 function next_action(::AbstractPolicy, ::PublicState)
     throw(MethodError(next_action, ()))
 end
+"""Uniform policy-call value with optional provider-neutral operational metadata."""
+struct PolicyDecision
+    action::ExperimentAction
+    operational_metadata::Union{Nothing,NamedTuple}
+end
+next_decision(policy::AbstractPolicy, state::PublicState) = PolicyDecision(next_action(policy, state), nothing)
 function validate_action(a::ExperimentAction, state::PublicState)
     l = state.limits
     inrange(x, r) = isfinite(x) && r[1] <= x <= r[2]
@@ -236,4 +262,11 @@ using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, Mod
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
        ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+import .ScientistPolicyAPI: next_decision
+policy_identity(::ScientistPolicy) = PolicyIdentity("scientist", version=PROMPT_VERSION)
+policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, provider_calls="injected_client")
+
+include("protocol/RunController.jl")
+using .RunController: RunConfig, RunOutcome, run_experiment, validate_run_events
+export RunConfig, RunOutcome, run_experiment, validate_run_events
 end

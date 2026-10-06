@@ -1,7 +1,7 @@
 module ScientistPolicyAPI
 
-using ..Falsify: AbstractPolicy, PublicState, ExperimentAction
-import ..Falsify: next_action
+using ..Falsify: AbstractPolicy, PublicState, ExperimentAction, PolicyDecision
+import ..Falsify: next_action, next_decision
 using ..Falsify: JSON3
 
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
@@ -51,8 +51,17 @@ struct RequestObservation
     noise_scale_m::Union{Nothing,Float64}
 end
 struct RequestHistoryEntry
-    action::ExperimentAction
-    observation::RequestObservation
+    requested_action::Union{Nothing,ExperimentAction}
+    validation_code::Union{Nothing,String}
+    consumed_intervention::Bool
+    observation::Union{Nothing,RequestObservation}
+    failure_code::Union{Nothing,String}
+    remaining_budget::Int
+end
+function Base.getproperty(entry::RequestHistoryEntry, name::Symbol)
+    name === :action && return getfield(entry, :requested_action)
+    name === :observation && return getfield(entry, :observation)
+    getfield(entry, name)
 end
 
 """Deliberate model DTO. It contains no evaluator/world/provenance references."""
@@ -91,9 +100,13 @@ function model_request(state::PublicState)
     limits = RequestLimits(l.displacement_m, l.velocity_m_per_s,
         l.drive_acceleration_m_per_s2, l.drive_frequency_hz, l.duration_s,
         l.cadence_s, l.max_samples)
-    history = Tuple(RequestHistoryEntry(action, RequestObservation(
-        Tuple(RequestMeasurement(m.time_s, m.displacement_m, m.uncertainty_m) for m in obs.measurements),
-        obs.noise_model, obs.noise_scale_m)) for (action, obs) in state.history)
+    history = Tuple(RequestHistoryEntry(entry.requested_action,
+        entry.validation_code === nothing ? nothing : String(entry.validation_code),
+        entry.consumed_intervention,
+        entry.observation === nothing ? nothing : RequestObservation(
+            Tuple(RequestMeasurement(m.time_s, m.displacement_m, m.uncertainty_m) for m in entry.observation.measurements),
+            entry.observation.noise_model, entry.observation.noise_scale_m),
+        entry.failure_code === nothing ? nothing : String(entry.failure_code), entry.remaining_budget) for entry in state.history)
     ModelRequest(PROMPT_VERSION, SCIENTIST_PROMPT, state.task.model_description,
         limits, state.remaining_budget, history)
 end
@@ -135,7 +148,7 @@ function parse_action(content::String)
         drive_acceleration_m_per_s2=values[3], drive_frequency_hz=values[4])
 end
 
-function next_action(policy::ScientistPolicy, state::PublicState)
+function next_decision(policy::ScientistPolicy, state::PublicState)
     model_response = try
         request(policy.client, model_request(state))
     catch failure
@@ -143,7 +156,12 @@ function next_action(policy::ScientistPolicy, state::PublicState)
         throw(PolicyFailure(:client_failure))
     end
     model_response isa ModelResponse || throw(PolicyFailure(:client_failure))
-    parse_action(model_response.content)
+    PolicyDecision(parse_action(model_response.content), (; provider=model_response.metadata.provider,
+        model=model_response.metadata.model, request_id=model_response.metadata.request_id,
+        input_tokens=model_response.metadata.input_tokens, output_tokens=model_response.metadata.output_tokens,
+        latency_s=model_response.metadata.latency_s, cost=model_response.metadata.cost,
+        finish_reason=model_response.metadata.finish_reason))
 end
+next_action(policy::ScientistPolicy, state::PublicState) = next_decision(policy, state).action
 
 end

@@ -46,7 +46,12 @@ struct RunEvent
     status::String
     elapsed_seconds::Union{Nothing,Float64}
     failure::Union{Nothing,PublicFailure}
+    operational_metadata::Union{Nothing,NamedTuple}
 end
+RunEvent(sequence, requested_action, validation_valid, validation_code, consumed_intervention,
+    observation, remaining_budget, status, elapsed_seconds, failure) = RunEvent(sequence,
+    requested_action, validation_valid, validation_code, consumed_intervention, observation,
+    remaining_budget, status, elapsed_seconds, failure, nothing)
 
 struct TerminalResult
     status::String
@@ -195,7 +200,8 @@ _event(e) = Dict("sequence"=>e.sequence, "requested_action"=>_action(e.requested
     "validation_valid"=>e.validation_valid, "validation_code"=>e.validation_code,
     "consumed_intervention"=>e.consumed_intervention, "observation"=>_observation(e.observation),
     "remaining_budget"=>e.remaining_budget, "status"=>e.status,
-    "elapsed_seconds"=>e.elapsed_seconds, "failure"=>_failure(e.failure))
+    "elapsed_seconds"=>e.elapsed_seconds, "failure"=>_failure(e.failure),
+    "operational_metadata"=>e.operational_metadata === nothing ? nothing : _dict(e.operational_metadata))
 _terminal(t) = t === nothing ? nothing : Dict("status"=>t.status, "final_output"=>t.final_output,
     "failure"=>_failure(t.failure), "interventions_used"=>t.interventions_used,
     "decision_opportunities_used"=>t.decision_opportunities_used, "invalid_action_count"=>t.invalid_action_count)
