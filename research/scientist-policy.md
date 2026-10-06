@@ -12,10 +12,8 @@ instruction; the public `TaskDescription.model_description`; action ranges and
 fixed measurement schedule from `ActionLimits` (with SI-explicit field names);
 remaining intervention budget; and ordered prior action/observation pairs.
 Observations contain only sampled times, displacements, optional measurement
-uncertainties, and optional publicly declared noise model/scale. The present
-`PublicState` history contract contains only accepted action/observation pairs,
-so this request cannot represent rejected attempts or public failure outcomes.
-DAL-118 extends the shared history contract with public decision entries;
+uncertainties, and optional publicly declared noise model/scale. DAL-118 extends
+the shared history contract with public decision entries;
 scientist requests project the same entries, including safe validation/failure
 codes and post-event budget, without evaluator diagnostics.
 

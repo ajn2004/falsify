@@ -1,12 +1,12 @@
 module ScientistPolicyAPI
 
-using ..Falsify: AbstractPolicy, PublicState, ExperimentAction, PolicyDecision
+using ..Falsify: AbstractPolicy, PublicState, ExperimentAction, PolicyDecision, PolicyFailure, OperationalMetadata
 import ..Falsify: next_action, next_decision
 using ..Falsify: JSON3
 
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-       ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+        ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
 
 abstract type AbstractModelClient end
 
@@ -86,11 +86,6 @@ Use only the supplied task and observed history; do not claim access to informat
 """
 
 """Public-safe stable interaction/schema failure, with no raw diagnostic text."""
-struct PolicyFailure <: Exception
-    code::Symbol
-end
-Base.showerror(io::IO, failure::PolicyFailure) = print(io, "scientist policy failure: ", failure.code)
-
 function request(::AbstractModelClient, ::ModelRequest)::ModelResponse
     throw(MethodError(request, ()))
 end
@@ -156,11 +151,17 @@ function next_decision(policy::ScientistPolicy, state::PublicState)
         throw(PolicyFailure(:client_failure))
     end
     model_response isa ModelResponse || throw(PolicyFailure(:client_failure))
-    PolicyDecision(parse_action(model_response.content), (; provider=model_response.metadata.provider,
+    metadata = OperationalMetadata(provider=model_response.metadata.provider,
         model=model_response.metadata.model, request_id=model_response.metadata.request_id,
         input_tokens=model_response.metadata.input_tokens, output_tokens=model_response.metadata.output_tokens,
         latency_s=model_response.metadata.latency_s, cost=model_response.metadata.cost,
-        finish_reason=model_response.metadata.finish_reason))
+        finish_reason=model_response.metadata.finish_reason)
+    try
+        PolicyDecision(parse_action(model_response.content), metadata)
+    catch failure
+        failure isa PolicyFailure || rethrow()
+        throw(PolicyFailure(failure.code, metadata))
+    end
 end
 next_action(policy::ScientistPolicy, state::PublicState) = next_decision(policy, state).action
 

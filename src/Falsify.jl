@@ -123,7 +123,7 @@ function observe(world::OscillatorWorld, action::OscillatorExperiment)
 end
 export ExperimentAction, to_environment_action, Measurement, Observation, PublicState, ActionLimits,
        TaskDescription, policy_task, ValidationResult, validate_action, AbstractPolicy, next_action, limits_for, policy_observation,
-       DecisionHistoryEntry, PolicyDecision, next_decision
+       DecisionHistoryEntry, PolicyDecision, OperationalMetadata, PolicyFailure, policy_seed, next_decision
 
 """Policy-facing oscillator controls, with SI units explicit in field names."""
 Base.@kwdef struct ExperimentAction
@@ -196,14 +196,6 @@ struct PublicState
     history::Tuple{Vararg{DecisionHistoryEntry}}
     remaining_budget::Int
 end
-function PublicState(task::TaskDescription, limits::ActionLimits, history::Tuple, budget::Integer)
-    entries = if isempty(history) || first(history) isa DecisionHistoryEntry
-        history
-    else
-        Tuple(DecisionHistoryEntry(a, true, :accepted, true, o, nothing, Int(budget)-i) for (i,(a,o)) in enumerate(history))
-    end
-    PublicState(task, limits, entries, Int(budget))
-end
 limits_for(task::OscillatorTaskDescription) = ActionLimits(
     displacement_m=task.displacement_bounds, velocity_m_per_s=task.velocity_bounds,
     drive_acceleration_m_per_s2=task.drive_acceleration_bounds_m_per_s2,
@@ -217,11 +209,28 @@ function next_action(::AbstractPolicy, ::PublicState)
     throw(MethodError(next_action, ()))
 end
 """Uniform policy-call value with optional provider-neutral operational metadata."""
+Base.@kwdef struct OperationalMetadata
+    provider::Union{Nothing,String}=nothing
+    model::Union{Nothing,String}=nothing
+    request_id::Union{Nothing,String}=nothing
+    input_tokens::Union{Nothing,Int}=nothing
+    output_tokens::Union{Nothing,Int}=nothing
+    latency_s::Union{Nothing,Float64}=nothing
+    cost::Union{Nothing,Float64}=nothing
+    finish_reason::Union{Nothing,String}=nothing
+end
 struct PolicyDecision
     action::ExperimentAction
-    operational_metadata::Union{Nothing,NamedTuple}
+    operational_metadata::Union{Nothing,OperationalMetadata}
 end
 next_decision(policy::AbstractPolicy, state::PublicState) = PolicyDecision(next_action(policy, state), nothing)
+struct PolicyFailure <: Exception
+    code::Symbol
+    operational_metadata::Union{Nothing,OperationalMetadata}
+end
+PolicyFailure(code::Symbol) = PolicyFailure(code, nothing)
+Base.showerror(io::IO, failure::PolicyFailure) = print(io, "policy failure: ", failure.code)
+policy_seed(::AbstractPolicy) = nothing
 function validate_action(a::ExperimentAction, state::PublicState)
     l = state.limits
     inrange(x, r) = isfinite(x) && r[1] <= x <= r[2]
@@ -249,7 +258,7 @@ using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,
     RunEvent, PublicFailure, EvaluatorFailure, TerminalResult, new_run_id, capture_provenance,
     ArtifactActionLimits, ProtocolSettings, PolicyIdentity, artifact_limits, evaluator_artifact, write_run, load_run
 export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
-       PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
+        PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
        PolicyIdentity, artifact_limits, new_run_id, capture_provenance, evaluator_artifact, write_run, load_run
 include("baselines/RandomPolicy.jl")
 include("baselines/FixedDesignPolicy.jl")
@@ -258,10 +267,10 @@ export RandomPolicy, FixedDesignPolicy, policy_identity, policy_configuration
 include("agents/ScientistPolicy.jl")
 using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
     RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-    ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+     ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-       ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
 import .ScientistPolicyAPI: next_decision
 policy_identity(::ScientistPolicy) = PolicyIdentity("scientist", version=PROMPT_VERSION)
 policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, provider_calls="injected_client")

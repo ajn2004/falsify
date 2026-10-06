@@ -45,12 +45,18 @@ function Falsify.request(client::FakeModelClient, request::ModelRequest)
     ModelResponse(client.content; metadata=ModelMetadata(provider="mock", model="fixed"))
 end
 
+struct MalformedWithMetadata <: AbstractModelClient end
+Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-json";
+    metadata=ModelMetadata(provider="mock", model="malformed", request_id="request-42",
+        input_tokens=17, output_tokens=3, latency_s=0.25, cost=0.004))
+
 @testset "provider-independent scientist policy" begin
     world = generate_world(7123; config=OscillatorConfig(1.0, 3))
     limits = limits_for(public_task(world))
     action0 = ExperimentAction(initial_displacement_m=0.25, initial_velocity_m_per_s=-0.1)
     observation = Observation((Measurement(0.0, 0.25, nothing), Measurement(0.5, 0.1, nothing)), nothing, nothing)
-    state = PublicState(policy_task(public_task(world)), limits, ((action0, observation),), 4)
+    prior = DecisionHistoryEntry(action0, true, :accepted, true, observation, nothing, 4)
+    state = PublicState(policy_task(public_task(world)), limits, (prior,), 4)
     good = """{"initial_displacement_m":0.5,"initial_velocity_m_per_s":0.2,"drive_acceleration_m_per_s2":0.0,"drive_frequency_hz":0.0}"""
     captured = Ref{Union{Nothing,ModelRequest}}(nothing)
     policy = ScientistPolicy(FakeModelClient(good, false, captured))
@@ -105,6 +111,16 @@ end
     @test client_error isa PolicyFailure
     @test client_error.code == :client_failure
     @test !occursin("truth", sprint(showerror, client_error))
+    malformed = try
+        next_action(ScientistPolicy(MalformedWithMetadata()), state)
+        nothing
+    catch failure
+        failure
+    end
+    @test malformed isa PolicyFailure
+    @test malformed.code == :malformed_response
+    @test malformed.operational_metadata.request_id == "request-42"
+    @test malformed.operational_metadata.input_tokens == 17
 
     outside = """{"initial_displacement_m":99,"initial_velocity_m_per_s":0,"drive_acceleration_m_per_s2":0,"drive_frequency_hz":0}"""
     parsed_action = next_action(ScientistPolicy(FakeModelClient(outside, false,
@@ -193,7 +209,6 @@ end
     limits = limits_for(public_task(world))
     task = policy_task(public_task(world))
     empty_state = PublicState(task, limits, (), 12)
-    state_at(history, budget=12) = PublicState(task, limits, history, budget)
     controls(action) = (action.initial_displacement_m, action.initial_velocity_m_per_s,
         action.drive_acceleration_m_per_s2, action.drive_frequency_hz)
 
@@ -219,13 +234,16 @@ end
     policy = FixedDesignPolicy()
     action0 = ExperimentAction(initial_displacement_m=0.0)
     obs_a = Observation((Measurement(0.0, -100.0, nothing),), nothing, nothing)
-    design = [next_action(policy, state_at(ntuple(_ -> (action0, obs_a), i-1), 12-i+1)) for i in 1:12]
+    previous_entry = DecisionHistoryEntry(action0, true, :accepted, true, obs_a, nothing, 11)
+    design = [next_action(policy, PublicState(task, limits,
+        ntuple(_ -> previous_entry, i-1), 12-i+1)) for i in 1:12]
     @test all(a -> validate_action(a, empty_state).valid, design)
     # Different measurement values at the same history length do not change the choice.
     obs_b = Observation((Measurement(0.0, 100.0, nothing),), nothing, nothing)
-    h_a = ((action0, obs_a),)
-    h_b = ((action0, obs_b),)
-    @test controls(next_action(policy, state_at(h_a))) == controls(next_action(policy, state_at(h_b)))
+    h_a = (DecisionHistoryEntry(action0, true, :accepted, true, obs_a, nothing, 11),)
+    h_b = (DecisionHistoryEntry(action0, true, :accepted, true, obs_b, nothing, 11),)
+    @test controls(next_action(policy, PublicState(task, limits, h_a, 12))) ==
+        controls(next_action(policy, PublicState(task, limits, h_b, 12)))
     @test controls.(design[1:4]) != controls.(design[5:8])
     @test controls(design[1]) == controls(design[11]) # deterministic cycling after base design
     @test controls(next_action(policy, empty_state)) == controls(design[1]) # budget-independent prefix
@@ -352,6 +370,9 @@ end
     controls(events) = [(e.requested_action, e.observation) for e in events]
     @test controls(a) == controls(b)
     @test controls(a) != controls(runrandom(82))
+    random_outcome = run_experiment(world, RandomPolicy(81), RunConfig(1);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test random_outcome.provenance.policy_seed == 81
 
     client = SequenceClient(Ref(0), ModelRequest[])
     outcome = run_experiment(world, ScientistPolicy(client), RunConfig(2; retry_allowance=1);
@@ -366,6 +387,8 @@ end
     @test client.requests[3].history[2].validation_code == "invalid_drive"
     @test client.requests[3].history[2].remaining_budget == 1
     @test outcome.public.events[1].operational_metadata.provider == "mock"
+    @test all(e -> e.status == "running", outcome.public.events[1:end-1])
+    @test outcome.public.events[end].status == outcome.public.terminal.status
 
     failureclient = FakeModelClient("", true, Ref{Union{Nothing,ModelRequest}}(nothing))
     failure = run_experiment(world, ScientistPolicy(failureclient), RunConfig(2); root=normpath(joinpath(@__DIR__, "..")))
@@ -373,6 +396,12 @@ end
     @test failure.public.terminal.decision_opportunities_used == 1
     @test failure.public.terminal.interventions_used == 0
     @test failure.public.events[1].failure.code == "client_failure"
+    @test failure.public.events[end].status == failure.public.terminal.status
+    malformed_run = run_experiment(world, ScientistPolicy(MalformedWithMetadata()), RunConfig(2);
+        root=normpath(joinpath(@__DIR__, "..")))
+    @test malformed_run.public.events[1].failure.code == "malformed_response"
+    @test malformed_run.public.events[1].operational_metadata.request_id == "request-42"
+    @test malformed_run.public.events[1].operational_metadata.input_tokens == 17
     @test !occursin("private provider", JSON3.write(Falsify.RunArtifacts._public(failure.public)))
 
     counter = Ref(0)

@@ -4,10 +4,9 @@ using Dates
 import ..Falsify: OscillatorWorld, public_task, policy_task, limits_for, PublicState,
     DecisionHistoryEntry, ExperimentAction, PolicyDecision, next_decision, validate_action,
     to_environment_action, observe, policy_observation, policy_identity, policy_configuration,
-    RandomPolicy, PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
-    PublicFailure, TerminalResult, ProtocolSettings, artifact_limits, new_run_id,
+    PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
+    PublicFailure, PolicyFailure, TerminalResult, ProtocolSettings, artifact_limits, new_run_id, policy_seed,
     capture_provenance, evaluator_artifact, write_run
-import ..Falsify.ScientistPolicyAPI: PolicyFailure
 
 export RunConfig, RunOutcome, run_experiment, validate_run_events
 
@@ -73,7 +72,7 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
             code = String(failure.code)
             public_failure = PublicFailure(code; stage_index=opportunities)
             push!(events, RunEvent(opportunities, nothing, nothing, nothing, false, nothing,
-                remaining, "failed", time()-started, public_failure))
+                remaining, "failed", time()-started, public_failure, failure.operational_metadata))
             push!(history, DecisionHistoryEntry(nothing, nothing, nothing, false, nothing, failure.code, remaining))
             status = "failed"; terminal_failure = public_failure
             break
@@ -101,14 +100,20 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
     invalid_count = count(e -> e.validation_valid === false && e.requested_action !== nothing, events)
     terminal = TerminalResult(status, nothing, terminal_failure, config.intervention_budget-remaining,
         opportunities, invalid_count)
+    if !isempty(events)
+        last_event = events[end]
+        events[end] = RunEvent(last_event.sequence, last_event.requested_action, last_event.validation_valid,
+            last_event.validation_code, last_event.consumed_intervention, last_event.observation,
+            last_event.remaining_budget, status, last_event.elapsed_seconds, last_event.failure,
+            last_event.operational_metadata)
+    end
     validate_run_events(events, config.intervention_budget, terminal)
     ident = policy_identity(policy)
     public = PublicRunArtifact(; run_id, status, finalized_at=string(now(UTC)),
         task_description=task.model_description, action_limits=artifact_limits(limits),
         intervention_budget=config.intervention_budget, protocol_settings=ProtocolSettings(false),
         policy_identity=ident, events=Tuple(events), terminal)
-    seed = policy isa RandomPolicy ? policy.seed : nothing
-    provenance = capture_provenance(run_id; root, world, policy_seed=seed, repetition_id,
+    provenance = capture_provenance(run_id; root, world, policy_seed=policy_seed(policy), repetition_id,
         configuration=(policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
             retry_allowance=config.max_decision_opportunities-config.intervention_budget))
     evaluator = evaluator_artifact(world, run_id)

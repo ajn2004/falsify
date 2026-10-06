@@ -4,7 +4,7 @@ using Dates
 using JSON3
 using SHA
 using UUIDs
-import ..Falsify: ActionLimits, ExperimentAction, Observation, OscillatorWorld, evaluator_truth, metadata
+import ..Falsify: ActionLimits, ExperimentAction, Observation, OscillatorWorld, OperationalMetadata, evaluator_truth, metadata
 
 export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
        PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
@@ -46,7 +46,7 @@ struct RunEvent
     status::String
     elapsed_seconds::Union{Nothing,Float64}
     failure::Union{Nothing,PublicFailure}
-    operational_metadata::Union{Nothing,NamedTuple}
+    operational_metadata::Union{Nothing,OperationalMetadata}
 end
 RunEvent(sequence, requested_action, validation_valid, validation_code, consumed_intervention,
     observation, remaining_budget, status, elapsed_seconds, failure) = RunEvent(sequence,
@@ -183,6 +183,7 @@ evaluator_artifact(world::OscillatorWorld, run_id; condition_id=nothing, evaluat
 end
 
 _dict(x::NamedTuple) = Dict(string(k) => v for (k,v) in pairs(x))
+_dict(x::OperationalMetadata) = Dict(string(k) => getfield(x, k) for k in fieldnames(OperationalMetadata))
 _dict(x::ArtifactActionLimits) = Dict(string(k) => getfield(x, k) for k in fieldnames(ArtifactActionLimits))
 _dict(x::ProtocolSettings) = Dict(string(k) => getfield(x, k) for k in fieldnames(ProtocolSettings))
 _dict(x::PolicyIdentity) = Dict(string(k) => getfield(x, k) for k in fieldnames(PolicyIdentity))
