@@ -4,6 +4,7 @@ module Falsify
 using OrdinaryDiffEqTsit5: Tsit5
 using Random: MersenneTwister, rand
 using SciMLBase: ODEProblem, solve
+using JSON3
 
 export OscillatorConfig, OscillatorExperiment, CleanOscillatorObservation,
        OscillatorTaskDescription, OscillatorMetadata, OscillatorWorld,
@@ -224,8 +225,15 @@ using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,
 export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
        PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
        PolicyIdentity, artifact_limits, new_run_id, capture_provenance, evaluator_artifact, write_run, load_run
-
 include("baselines/RandomPolicy.jl")
 include("baselines/FixedDesignPolicy.jl")
 export RandomPolicy, FixedDesignPolicy, policy_identity, policy_configuration
+
+include("agents/ScientistPolicy.jl")
+using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
+    RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
+    ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
+       RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
+       ScientistPolicy, PolicyFailure, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
 end
