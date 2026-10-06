@@ -99,12 +99,17 @@ function score_run(run, cfg::MetricConfig=MetricConfig())
     p, ev = loaded.public, loaded.evaluator
     fit = fit_oscillator(_fitpairs(p))
     good = fit.status == :success
+    # Infrastructure exclusions must be classified upstream (DAL-123). A run
+    # still marked failed here is a behavioral failure for confirmatory scoring.
+    behaviorally_failed = p.status == "failed"
     truth = ev.truth
     ze = good ? abs(fit.zeta-Float64(truth.damping_ratio))/(0.40-0.05) : nothing
     we = good ? abs(fit.omega0-Float64(truth.natural_frequency_rad_s))/(2.0-0.8) : nothing
     raw_parameter = good ? sqrt((ze^2+we^2)/2) : nothing
-    pe = good ? raw_parameter/(1+raw_parameter) : cfg.failure_parameter_score
-    rawpred, pred = good ? _prediction_score(p, truth, fit, cfg) : (nothing, cfg.failure_prediction_score)
+    pe_fit = good ? raw_parameter/(1+raw_parameter) : cfg.failure_parameter_score
+    rawpred, pred_fit = good ? _prediction_score(p, truth, fit, cfg) : (nothing, cfg.failure_prediction_score)
+    pe = behaviorally_failed ? cfg.failure_parameter_score : pe_fit
+    pred = behaviorally_failed ? cfg.failure_prediction_score : pred_fit
     pred = min(pred, cfg.failure_prediction_score)
     events = collect(p.events); decisions = Int(p.terminal.decision_opportunities_used)
     interventions = Int(p.terminal.interventions_used); invalid = Int(p.terminal.invalid_action_count)
@@ -118,8 +123,8 @@ function score_run(run, cfg::MetricConfig=MetricConfig())
     calls = length(ops)
     prior_raw = sqrt((((0.225-Float64(ev.truth.damping_ratio))/0.35)^2 +
         ((1.4-Float64(ev.truth.natural_frequency_rad_s))/1.2)^2)/2)
-    improvement = good && interventions > 0 ?
-        (prior_raw/(1+prior_raw)-pe)/interventions : nothing
+    improvement = good && !behaviorally_failed && interventions > 0 ?
+        (prior_raw/(1+prior_raw)-pe_fit)/interventions : nothing
     status = String(p.status)
     RunMetrics(String(p.run_id), String(p.policy_identity.name), fit.status, fit.objective,
         fit.evaluations, fit.zeta, fit.omega0,

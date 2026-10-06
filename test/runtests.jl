@@ -13,6 +13,16 @@ end
 Falsify.next_action(p::CountingPolicy, state::PublicState) = (p.calls[] += 1; ExperimentAction())
 Falsify.policy_identity(::CountingPolicy) = PolicyIdentity("counting_test")
 Falsify.policy_configuration(::CountingPolicy) = (;)
+struct SevenThenFail <: AbstractPolicy
+    calls::Base.RefValue{Int}
+end
+function Falsify.next_action(p::SevenThenFail, state::PublicState)
+    p.calls[] += 1
+    p.calls[] <= 7 || throw(PolicyFailure(:malformed_response))
+    Falsify.next_action(FixedDesignPolicy(), state)
+end
+Falsify.policy_identity(::SevenThenFail) = PolicyIdentity("seven_then_fail")
+Falsify.policy_configuration(::SevenThenFail) = (;)
 
 @testset "Falsify package bootstrap" begin
     @test Base.pkgversion(Falsify) == v"0.1.0"
@@ -361,6 +371,7 @@ end
     world = generate_world(9182; config=OscillatorConfig(1.0, 5))
     fixed = run_experiment(world, FixedDesignPolicy(), RunConfig(2); root=normpath(joinpath(@__DIR__, "..")))
     @test fixed.public.status == "completed"
+    @test fixed.public.protocol_settings.observation_noise_disclosed
     @test fixed.public.terminal.interventions_used == 2
     @test fixed.public.terminal.decision_opportunities_used == 2
     @test length(fixed.public.events) == 2
@@ -378,6 +389,7 @@ end
     outcome = run_experiment(world, ScientistPolicy(client), RunConfig(2; retry_allowance=1);
         root=normpath(joinpath(@__DIR__, "..")))
     @test outcome.public.status == "completed"
+    @test outcome.public.protocol_settings.observation_noise_disclosed
     @test outcome.public.terminal.interventions_used == 2
     @test outcome.public.terminal.decision_opportunities_used == 3
     @test outcome.public.terminal.invalid_action_count == 1
@@ -522,5 +534,18 @@ end
         @test metrics.model_calls == 1
         @test metrics.input_tokens == 17
         @test metrics.estimated_cost == 0.004
+    end
+
+    # Good partial evidence does not rescue a behaviorally failed run.
+    partial_failure = run_experiment(world, SevenThenFail(Ref(0)), RunConfig(8))
+    mktempdir() do dir
+        path = write_run(dir, partial_failure.public, partial_failure.provenance, partial_failure.evaluator)
+        metrics = score_run(path)
+        @test metrics.fit_status == :success
+        @test metrics.fit_objective_m2 !== nothing
+        @test metrics.parameter_error == 1.0
+        @test metrics.heldout_prediction_error == 1.0
+        @test !metrics.success
+        @test metrics.completion_status == "failed"
     end
 end
