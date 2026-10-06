@@ -216,4 +216,12 @@ function validate_action(a::ExperimentAction, state::PublicState)
     end
     ValidationResult(true, :accepted)
 end
+
+include("artifacts/RunArtifacts.jl")
+using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,
+    RunEvent, PublicFailure, EvaluatorFailure, TerminalResult, new_run_id, capture_provenance,
+    ArtifactActionLimits, ProtocolSettings, PolicyIdentity, artifact_limits, evaluator_artifact, write_run, load_run
+export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
+       PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
+       PolicyIdentity, artifact_limits, new_run_id, capture_provenance, evaluator_artifact, write_run, load_run
 end
