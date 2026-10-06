@@ -62,7 +62,8 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
     status = "completed"; terminal_failure = nothing
     opportunities = 0
     while remaining > 0 && opportunities < config.max_decision_opportunities
-        state = PublicState(policy_task(task), limits, Tuple(history), remaining)
+        state = PublicState(policy_task(task), limits, Tuple(history), remaining,
+            config.max_decision_opportunities - opportunities)
         opportunities += 1
         started = time()
         decision = try
