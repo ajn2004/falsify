@@ -100,3 +100,78 @@ end
     @test obs.noise_model === nothing
     @test obs.noise_scale_m === nothing
 end
+
+@testset "immutable run artifacts and provenance" begin
+    mktempdir() do temp
+        world = generate_world(9182; config=OscillatorConfig(1.0, 3))
+        run_id = new_run_id()
+        @test run_id != string(9182)
+        @test occursin(r"^[0-9a-f-]{36}$", run_id)
+        action = ExperimentAction(initial_displacement_m=0.25)
+        observation = policy_observation(observe(world, to_environment_action(action)))
+        event = RunEvent(1, action, true, "accepted", true, observation, 1, "completed", 0.02, nothing)
+        failure = PublicFailure("provider_timeout"; public_message="Policy request timed out", stage_index=2)
+        evaluator_failure = EvaluatorFailure("provider_timeout"; diagnostic="private detail", stage_index=2)
+        terminal = TerminalResult("completed", nothing, nothing, 1, 1, 0)
+        failure_event = RunEvent(2, nothing, false, "provider_timeout", false, nothing, 1,
+            "failed", nothing, failure)
+        public = PublicRunArtifact(; run_id, status="completed", finalized_at="2026-10-05T00:00:00Z", task_description="oscillator task",
+            action_limits=artifact_limits(ActionLimits(displacement_m=(-2.0, 2.0), velocity_m_per_s=(-1.0, 1.0),
+                drive_acceleration_m_per_s2=(-1.0, 1.0), drive_frequency_hz=(0.0, 3.0), duration_s=1.0,
+                cadence_s=0.5, max_samples=3)), intervention_budget=1,
+            protocol_settings=ProtocolSettings(false), policy_identity=PolicyIdentity("test"),
+            events=[event, failure_event], terminal)
+        provenance = capture_provenance(run_id; root=normpath(joinpath(@__DIR__, "..")), world,
+            noise_seed=32, policy_seed=7)
+        @test_throws ArgumentError capture_provenance(run_id; world, world_seed=1234)
+        evaluator = Falsify.RunArtifacts.evaluator_artifact(world, run_id;
+            condition_id="clean", evaluator_metadata=(fixture="test",), failures=[evaluator_failure])
+        path = write_run(temp, public, provenance, evaluator)
+        loaded = load_run(path)
+        @test loaded.public.schema_version == 1
+        @test loaded.public.run_id == run_id
+        @test loaded.public.events[1].requested_action.initial_displacement_m == 0.25
+        @test loaded.public.events[1].observation.measurements[2].displacement_m == observation.measurements[2].displacement_m
+        @test loaded.public.events[2].failure.code == "provider_timeout"
+        @test !haskey(loaded.public.events[2].failure, :diagnostic)
+        @test loaded.evaluator.failures[1].diagnostic == "private detail"
+        @test loaded.evaluator.truth.damping_ratio == evaluator.damping_ratio
+        @test loaded.provenance.world_seed == 9182
+        @test loaded.provenance.noise_seed == 32
+        @test loaded.provenance.policy_seed == 7
+        @test loaded.provenance.configuration.solver == "Tsit5"
+        @test loaded.provenance.configuration.final_time_s == 1.0
+        spoofed = capture_provenance(run_id; root=temp, world,
+            configuration=(solver="not_the_world_solver", reltol=9.0))
+        @test spoofed.configuration.solver == "Tsit5"
+        @test spoofed.configuration.reltol == metadata(world).reltol
+        @test loaded.provenance.git_commit === nothing || occursin(r"^[0-9a-f]{40}$", loaded.provenance.git_commit)
+        @test loaded.provenance.manifest_sha256 !== nothing
+        @test_throws ArgumentError write_run(temp, public, provenance, evaluator)
+
+        public_text = read(joinpath(path, "public.json"), String)
+        @test !occursin("damping_ratio", public_text)
+        @test !occursin("natural_frequency", public_text)
+        @test !occursin("world_seed", public_text)
+        @test !occursin("9182", public_text)
+        @test !occursin("clean", public_text)
+        @test !occursin("private detail", public_text)
+        @test !(:world_seed in fieldnames(PublicRunArtifact))
+        @test !(:truth in fieldnames(PublicRunArtifact))
+        @test !hasfield(PublicRunArtifact, :world)
+        @test occursin("9182", read(joinpath(path, "provenance.json"), String))
+        @test occursin("damping_ratio", read(joinpath(path, "evaluator.json"), String))
+        @test_throws Exception PublicRunArtifact(world=world)
+
+        @test failure_event.failure.code == "provider_timeout"
+        @test !hasfield(PublicFailure, :diagnostic)
+        @test_throws MethodError PublicRunArtifact(; run_id, status="completed", task_description="bad",
+            action_limits=(;), intervention_budget=0, protocol_settings=(;), policy_identity=(;))
+        @test !occursin("Stacktrace", public_text)
+
+        open(joinpath(path, "public.json"), "w") do io
+            write(io, replace(public_text, "\"schema_version\":1" => "\"schema_version\":99"))
+        end
+        @test_throws ArgumentError load_run(path)
+    end
+end

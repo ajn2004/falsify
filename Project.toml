@@ -3,15 +3,23 @@ uuid = "c5d19932-e962-43fb-bfa3-3d5114a46ee3"
 version = "0.1.0"
 
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [compat]
-julia = "=1.12.7"
+Dates = "1.11.0"
+JSON3 = "1.14.3"
 OrdinaryDiffEqTsit5 = "1"
+SHA = "0.7.0"
 SciMLBase = "2"
+UUIDs = "1.11.0"
+julia = "=1.12.7"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
