@@ -6,24 +6,28 @@ using SHA
 using TOML
 using Dates
 
-const PROTOCOL = "falsify-v0.1-prereg-3"
+const PROTOCOL = "falsify-v0.1-prereg-4"
 const BUDGET = 8
 const OPPORTUNITIES = 16
 const CONDITIONS = (("gaussian_0.10", :gaussian), ("clean", :clean))
 
 export build_matrix, main, slot_key, retry_decision
+export nominal_provider_requests, analysis_conditions
+
+nominal_provider_requests(slots) = 8 * count(s -> s["policy"] == "scientist", slots)
+analysis_conditions() = ("gaussian_0.10",)
 
 function build_matrix(seed_path)
     manifest = TOML.parsefile(seed_path)
     manifest["protocol_id"] == PROTOCOL || error("unexpected protocol identity")
-    manifest["scientist_repetition_ids"] == [1, 2, 3] || error("unexpected scientist repetition IDs")
+    manifest["scientist_repetition_ids"] == [1] || error("unexpected scientist repetition IDs")
     worlds = manifest["worlds"]
     length(worlds) == 30 || error("expected exactly 30 frozen worlds")
     length(unique(w["world_seed"] for w in worlds)) == 30 || error("duplicate world seed")
     slots = Dict{String,Any}[]
-    for world in worlds, (condition_id, _) in CONDITIONS
+    for (condition_id, condition_worlds) in (("gaussian_0.10", worlds), ("clean", worlds[1:10])), world in condition_worlds
         for (policy, repetitions) in (("random", ["random"]), ("fixed_design", ["fixed"]),
-                ("scientist", ["scientist-1", "scientist-2", "scientist-3"]))
+                ("scientist", ["scientist-1"]))
             for repetition in repetitions
                 push!(slots, Dict{String,Any}(
                     "slot_id"=>"$(world["world_seed"])/$condition_id/$repetition",
@@ -38,7 +42,7 @@ function build_matrix(seed_path)
             end
         end
     end
-    length(slots) == 300 || error("matrix cardinality is not 300")
+    length(slots) == 120 || error("matrix cardinality is not 120")
     slots
 end
 
@@ -82,7 +86,7 @@ function _repo(root, mode)
     end
 end
 
-const RUNTIME_OUTPUT_PREFIXES = ("results/raw/", "results/confirmatory-v0.1/")
+const RUNTIME_OUTPUT_PREFIXES = ("results/raw/", "results/confirmatory-v0.1/", "results/confirmatory-v0.1-prereg-4/")
 
 function _source_dirty(root)
     lines = filter(!isempty, split(_repo(root, :dirty), '\n'))
@@ -245,7 +249,7 @@ function _verify_attempt(attempt, slot, root, commit)
             cfg.response_format == "strict_json_schema" && cfg.prompt_version == "scientist-v0-1" &&
             cfg.prompt_sha256 == "0b800b3ac2606ac8edd47defd9e185fdd11eb07ba30d57cad65ef02a29c04aba" &&
             cfg.schema_version == "experiment-action-v1" &&
-            cfg.requested_model == "openai/gpt-6.1-sol" && cfg.reasoning_effort == "medium" &&
+             cfg.requested_model == "openai/gpt-5.6-luna" && cfg.reasoning_effort == "medium" &&
             cfg.max_completion_tokens == 512 && cfg.allow_fallbacks == false && cfg.require_parameters == true ||
             error("scientist treatment provenance mismatch")
         cfg.seed === nothing || error("provider seed must be omitted")
@@ -308,15 +312,15 @@ end
 function main(args=ARGS)
     root = normpath(joinpath(@__DIR__, ".."))
     dry = "--dry-run" in args || "--plan" in args
-    state_root = joinpath(root, "results", "confirmatory-v0.1")
+    state_root = joinpath(root, "results", "confirmatory-v0.1-prereg-4")
     plan_path = joinpath(state_root, "execution-plan.json")
     state_path = joinpath(state_root, "execution-state.json")
     ledger_path = joinpath(state_root, "run-ledger.jsonl")
     journal_path = joinpath(state_root, "attempt-journal.jsonl")
     raw = joinpath(root, "results", "raw")
-    slots = build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
-    println("300 logical slots; 180 scientist slots; 120 baseline slots; 1,440 nominal provider requests")
-    println("30 matched worlds per condition (60 world-condition blocks total)")
+    slots = build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
+    println("120 logical slots; 40 scientist slots; 80 baseline slots; 320 nominal provider requests")
+    println("30 matched worlds in gaussian_0.10 primary; 10 matched worlds in clean descriptive condition")
     if dry
         println("planned_matrix_json: ", JSON3.write((protocol_id=PROTOCOL, slots)))
         return slots
@@ -325,7 +329,7 @@ function main(args=ARGS)
     commit = _repo(root, :commit)
     isempty(commit) && error("repository commit provenance unavailable")
     isempty(_source_dirty(root)) || error("confirmatory checkout must be clean before execution")
-    manifest = TOML.parsefile(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
+    manifest = TOML.parsefile(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
     pilot_seeds = Set([7122123, 7122124, 7122125, 7122126])
     isempty(intersect(pilot_seeds, Set(w["world_seed"] for w in manifest["worlds"]))) || error("pilot seed overlap")
     if isfile(plan_path)

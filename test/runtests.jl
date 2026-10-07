@@ -7,15 +7,22 @@ include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 
 @testset "DAL-124 frozen confirmatory matrix" begin
     root = normpath(joinpath(@__DIR__, ".."))
-    seeds = TOML.parsefile(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
-    slots = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
-    @test length(slots) == 300
-    @test count(s -> s["policy"] == "scientist", slots) == 180
-    @test count(s -> s["policy"] == "random", slots) == 60
-    @test count(s -> s["policy"] == "fixed_design", slots) == 60
-    @test Set(s["world_seed"] for s in slots if s["condition_id"] == "gaussian_0.10") == Set(w["world_seed"] for w in seeds["worlds"])
-    @test Set(s["world_seed"] for s in slots if s["condition_id"] == "clean") == Set(w["world_seed"] for w in seeds["worlds"])
-    @test Set(s["scientist_repetition_id"] for s in slots if s["policy"] == "scientist") == Set([1,2,3])
+    seeds = TOML.parsefile(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
+    slots = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
+    @test length(slots) == 120
+    @test count(s -> s["policy"] == "scientist", slots) == 40
+    @test count(s -> s["policy"] in ("random", "fixed_design"), slots) == 80
+    @test count(s -> s["condition_id"] == "gaussian_0.10", slots) == 90
+    @test count(s -> s["condition_id"] == "clean", slots) == 30
+    @test length(unique(s["world_seed"] for s in slots if s["condition_id"] == "gaussian_0.10")) == 30
+    @test length(unique(s["world_seed"] for s in slots if s["condition_id"] == "clean")) == 10
+    @test Set(s["world_seed"] for s in slots if s["condition_id"] == "clean") == Set(8123001:8123010)
+    @test all(s["repetition_id"] ∉ ("scientist-2", "scientist-3") for s in slots)
+    @test ConfirmatoryV01.nominal_provider_requests(slots) == 320
+    @test Set(ConfirmatoryV01.analysis_conditions()) == Set(["gaussian_0.10"])
+    @test all(Set(s["policy"] for s in slots if s["world_seed"] == world && s["condition_id"] == condition) ==
+        Set(["random", "fixed_design", "scientist"]) for condition in ("gaussian_0.10", "clean")
+        for world in unique(s["world_seed"] for s in slots if s["condition_id"] == condition))
     @test all(s["intervention_budget"] == 8 && s["max_decision_opportunities"] == 16 for s in slots)
     @test all(s["noise_seed"] == only(filter(w -> w["world_seed"] == s["world_seed"], seeds["worlds"]))["noise_seed"] for s in slots)
     @test all(s["policy"] != "random" || s["policy_seed"] == only(filter(w -> w["world_seed"] == s["world_seed"], seeds["worlds"]))["random_policy_seed"] for s in slots)
@@ -44,7 +51,7 @@ end
     @test Falsify.classify_run("aborted", nothing) == "infrastructure"
 
     root = normpath(joinpath(@__DIR__, ".."))
-    matrix = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
+    matrix = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
     fixed = first(filter(s -> s["policy"] == "fixed_design", matrix))
     random = first(filter(s -> s["policy"] == "random", matrix))
     record(policy, repetition, classification, slot) = (condition_id=slot["condition_id"],
@@ -225,17 +232,21 @@ end
 
 @testset "OpenRouter adapter contract" begin
     cfg = load_openrouter_config(joinpath(@__DIR__, "..", "configs", "v0.1-frontier.toml"))
-    @test cfg.model == "openai/gpt-6.1-sol"
+    @test cfg.model == "openai/gpt-5.6-luna"
     @test cfg.provider_order == ["openai"]
     @test !cfg.allow_fallbacks
+    treatment = TOML.parsefile(joinpath(@__DIR__, "..", "configs", "v0.1-frontier.toml"))
+    @test treatment == Dict("model"=>"openai/gpt-5.6-luna", "provider_order"=>["openai"],
+        "allow_fallbacks"=>false, "max_completion_tokens"=>512, "reasoning_effort"=>"medium",
+        "prompt_version"=>"scientist-v0-1", "schema_version"=>"experiment-action-v1")
     world = generate_world(912; config=OscillatorConfig(1.0, 3))
     limits = limits_for(public_task(world))
     state = PublicState(policy_task(public_task(world)), limits, (), 8, 16)
     req = model_request(state)
     calls = Ref(0)
     captured = Ref{Any}(nothing)
-    response_body = JSON3.write((id="req-abc", model="openai/gpt-6.1-sol-20260929",
-        openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-6.1-sol", selected=true)], total=1),),
+    response_body = JSON3.write((id="req-abc", model="openai/gpt-5.6-luna-20260929",
+        openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-5.6-luna", selected=true)], total=1),),
         choices=[(finish_reason="stop", message=(content="""{"initial_displacement_m":0.5,"initial_velocity_m_per_s":0.1,"drive_acceleration_m_per_s2":0.0,"drive_frequency_hz":0.0}""",))],
         usage=(prompt_tokens=22, completion_tokens=9, cost=0.0003)))
     fake_transport = function(url, headers, body)
@@ -248,7 +259,7 @@ end
     decision = Falsify.next_decision(policy, state)
     @test decision.action == ExperimentAction(initial_displacement_m=0.5, initial_velocity_m_per_s=0.1)
     @test decision.operational_metadata.request_id == "req-abc"
-    @test decision.operational_metadata.model == "openai/gpt-6.1-sol-20260929"
+    @test decision.operational_metadata.model == "openai/gpt-5.6-luna-20260929"
     @test decision.operational_metadata.gateway == "openrouter"
     @test decision.operational_metadata.provider == "OpenAI Flex"
     treatment = policy_configuration(client)
@@ -288,7 +299,7 @@ end
             key_getter=()->"secret-test-key")), RunConfig(1)).public)))
 
     failures = Ref(0)
-    error_body = JSON3.write((error=(message="diagnostic must not persist",), openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-6.1-sol", selected=true)], total=1),)))
+    error_body = JSON3.write((error=(message="diagnostic must not persist",), openrouter_metadata=(endpoints=(available=[(provider="OpenAI Flex", model="openai/gpt-5.6-luna", selected=true)], total=1),)))
     failing = OpenRouterClient(cfg; key_getter=()->"secret", transport=(args...)->begin
         failures[] += 1
         HTTP.Response(429, error_body)

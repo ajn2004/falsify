@@ -1,0 +1,160 @@
+schema_version = "v0.1-confirmatory-seeds-v2"
+protocol_id = "falsify-v0.1-prereg-4"
+generated_before_confirmatory_execution = true
+generation_rule = "Consecutive world seeds 8123001 through 8123030 inclusive; per world, noise_seed = world_seed + 1000000 and random_policy_seed = world_seed + 2000000. No selection on world truth or policy outcomes."
+pilot_seed_rule = "Pilot world seeds are in the 7122xxx range and listed in research/pilot-report-dal123.md; none overlap this set, and no derived pilot noise/policy seed collides with this file's derived seeds."
+analysis_bootstrap_seed = 9123999
+scientist_repetition_ids = [1]
+fixed_design_policy_seed = "none_required_deterministic"
+provider_seed = "omitted_by_design"
+noise_sharing_rule = "Within a matched world block, the listed noise_seed is identical for every policy and every scientist repetition; the same accepted-intervention index receives the same standard-normal sequence across policies."
+
+[[worlds]]
+world_seed = 8123001
+noise_seed = 9123001
+random_policy_seed = 10123001
+
+[[worlds]]
+world_seed = 8123002
+noise_seed = 9123002
+random_policy_seed = 10123002
+
+[[worlds]]
+world_seed = 8123003
+noise_seed = 9123003
+random_policy_seed = 10123003
+
+[[worlds]]
+world_seed = 8123004
+noise_seed = 9123004
+random_policy_seed = 10123004
+
+[[worlds]]
+world_seed = 8123005
+noise_seed = 9123005
+random_policy_seed = 10123005
+
+[[worlds]]
+world_seed = 8123006
+noise_seed = 9123006
+random_policy_seed = 10123006
+
+[[worlds]]
+world_seed = 8123007
+noise_seed = 9123007
+random_policy_seed = 10123007
+
+[[worlds]]
+world_seed = 8123008
+noise_seed = 9123008
+random_policy_seed = 10123008
+
+[[worlds]]
+world_seed = 8123009
+noise_seed = 9123009
+random_policy_seed = 10123009
+
+[[worlds]]
+world_seed = 8123010
+noise_seed = 9123010
+random_policy_seed = 10123010
+
+[[worlds]]
+world_seed = 8123011
+noise_seed = 9123011
+random_policy_seed = 10123011
+
+[[worlds]]
+world_seed = 8123012
+noise_seed = 9123012
+random_policy_seed = 10123012
+
+[[worlds]]
+world_seed = 8123013
+noise_seed = 9123013
+random_policy_seed = 10123013
+
+[[worlds]]
+world_seed = 8123014
+noise_seed = 9123014
+random_policy_seed = 10123014
+
+[[worlds]]
+world_seed = 8123015
+noise_seed = 9123015
+random_policy_seed = 10123015
+
+[[worlds]]
+world_seed = 8123016
+noise_seed = 9123016
+random_policy_seed = 10123016
+
+[[worlds]]
+world_seed = 8123017
+noise_seed = 9123017
+random_policy_seed = 10123017
+
+[[worlds]]
+world_seed = 8123018
+noise_seed = 9123018
+random_policy_seed = 10123018
+
+[[worlds]]
+world_seed = 8123019
+noise_seed = 9123019
+random_policy_seed = 10123019
+
+[[worlds]]
+world_seed = 8123020
+noise_seed = 9123020
+random_policy_seed = 10123020
+
+[[worlds]]
+world_seed = 8123021
+noise_seed = 9123021
+random_policy_seed = 10123021
+
+[[worlds]]
+world_seed = 8123022
+noise_seed = 9123022
+random_policy_seed = 10123022
+
+[[worlds]]
+world_seed = 8123023
+noise_seed = 9123023
+random_policy_seed = 10123023
+
+[[worlds]]
+world_seed = 8123024
+noise_seed = 9123024
+random_policy_seed = 10123024
+
+[[worlds]]
+world_seed = 8123025
+noise_seed = 9123025
+random_policy_seed = 10123025
+
+[[worlds]]
+world_seed = 8123026
+noise_seed = 9123026
+random_policy_seed = 10123026
+
+[[worlds]]
+world_seed = 8123027
+noise_seed = 9123027
+random_policy_seed = 10123027
+
+[[worlds]]
+world_seed = 8123028
+noise_seed = 9123028
+random_policy_seed = 10123028
+
+[[worlds]]
+world_seed = 8123029
+noise_seed = 9123029
+random_policy_seed = 10123029
+
+[[worlds]]
+world_seed = 8123030
+noise_seed = 9123030
+random_policy_seed = 10123030
