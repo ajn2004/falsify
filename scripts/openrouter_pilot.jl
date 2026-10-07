@@ -171,8 +171,11 @@ function verify_gate(attempt, world, run_config, provider_config; ledger_path)
 
     # Ledger: the last durable record for this attempt exists and matches.
     ledger_ok = isfile(ledger_path)
-    record = ledger_ok ? JSON3.read(strip(read(ledger_path, String))) : nothing
+    records = ledger_ok ? JSON3.read.(filter(!isempty, strip.(readlines(ledger_path)))) : []
+    matching_records = filter(r -> r.run_id == attempt.run_id, records)
+    record = isempty(matching_records) ? nothing : only(matching_records)
     check("ledger entry exists", ledger_ok)
+    check("ledger entry matches attempt", record !== nothing)
     if record !== nothing
         check("ledger entry matches run", record.run_id == attempt.run_id &&
             record.condition_id == GATE_CONDITION &&
