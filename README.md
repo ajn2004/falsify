@@ -34,3 +34,32 @@ The disposable smoke calculation still loads `configs/smoke.toml`, solves a
 generic first-order decay ODE with SciML, and adds noise from an explicitly
 seeded RNG. It writes a TOML result to `results/raw/bootstrap-smoke.toml`; it
 is only a package/bootstrap check and is not part of the scientific benchmark.
+
+## Provider credentials
+
+The ScientistPolicy treatment calls OpenRouter through
+`src/providers/OpenRouterClient.jl`, which reads `OPENROUTER_API_KEY` from the
+environment at request time. Provide it via your shell or secret manager:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+```
+
+Notes:
+
+- Never commit the key; `.env*` files are gitignored and the repository code
+  does not read dotenv files — inject the variable into the process environment
+  yourself (e.g. `export`, `direnv`, or a CI secret).
+- A missing/empty key produces a safe `PolicyFailure(:configuration_failure)`;
+  no network request is attempted, so tests never require credentials.
+- The key is only sent as an `Authorization` header to
+  `https://openrouter.ai/api/v1/chat/completions`; it is never written into
+  request bodies, artifacts, or logs.
+- Live calls are part of the exploratory operational gate only; confirmatory
+  execution is separately gated and documented in `research/pilot-report-dal123.md`.
+
+With a key set, the manual single-run exploratory smoke (not CI) is:
+
+```bash
+julia +1.12.7 --project=. scripts/openrouter_pilot.jl
+```

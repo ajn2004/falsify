@@ -49,3 +49,15 @@ Downstream analysis should operate on `public.json`, `provenance.json`, and
 simulator, or call a model. The transcript contains sampled observations and
 actions, sufficient for audit; full replay orchestration is outside this
 schema's current scope.
+
+Terminal status `aborted` is reserved for infrastructure failures (unexpected
+non-`PolicyFailure` exceptions, finalization faults, persistence faults); its
+public record carries only the stable code `apparatus_exception`, while the
+evaluator document holds a sanitized diagnostic (exception type name) and may
+mark `unfinalized_events` when decision-loop evidence could not be finalized.
+`run_attempt` additionally appends every attempt — including ones whose
+artifacts could not be persisted — to a JSON-lines run ledger recording run ID,
+seeds, condition, repetition, classification, terminal counts, and artifact
+location. The ledger is evaluator-side bookkeeping and the authority on
+attempted runs; analysis treats `run_class == "infrastructure"` records as
+matched-block exclusions, never as behavioral evidence.
