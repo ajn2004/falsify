@@ -35,8 +35,8 @@ All terminal infrastructure slots (including clean descriptive slots):
 
 | Endpoint | N worlds | Scientist mean | Baseline mean | Mean paired difference | 95% CI low | 95% CI high | Superiority? |
 |---|---:|---:|---:|---:|---:|---:|---|
-| parameter_error | 26 | 0.04348138499203168 | 0.004758576693380626 | 0.03872280829865105 | -0.001059500683295039 | 0.11614371117390494 | No |
-| prediction_error | 26 | 0.03926086319567101 | 0.0008343394208106831 | 0.03842652377486032 | -0.00023010313013364494 | 0.11543661042643666 | No |
+| parameter_error | 26 | 0.043481384992031656 | 0.004758576693380627 | 0.03872280829865105 | -0.001059500683295039 | 0.11614371117390494 | No |
+| prediction_error | 26 | 0.039260863195671 | 0.000834339420810683 | 0.03842652377486032 | -0.00023010313013364494 | 0.11543661042643666 | No |
 
 **Overall hypothesis: not supported.** Both co-primary endpoint intervals must independently lie below zero.
 
@@ -44,8 +44,8 @@ All terminal infrastructure slots (including clean descriptive slots):
 
 | Endpoint | N worlds | Scientist mean | Baseline mean | Mean paired difference | 95% CI low | 95% CI high | Superiority? |
 |---|---:|---:|---:|---:|---:|---:|---|
-| parameter_error | 26 | 0.04348138499203168 | 0.00397278289490108 | 0.03950860209713059 | -0.0005917931053886504 | 0.11732819050251223 | No |
-| prediction_error | 26 | 0.03926086319567101 | 0.0007748461024942815 | 0.038486017093176735 | -0.0001225941715255722 | 0.11546676062260415 | No |
+| parameter_error | 26 | 0.043481384992031656 | 0.00397278289490108 | 0.0395086020971306 | -0.0005917931053886504 | 0.11732819050251223 | No |
+| prediction_error | 26 | 0.039260863195671 | 0.0007748461024942815 | 0.038486017093176735 | -0.0001225941715255722 | 0.11546676062260415 | No |
 
 **Overall hypothesis: not supported.** Both co-primary endpoint intervals must independently lie below zero.
 

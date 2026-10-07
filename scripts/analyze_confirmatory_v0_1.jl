@@ -341,10 +341,10 @@ function bars_svg(path,title,labels,values; colors=nothing)
     svgwrite(path,title,String(take!(body)))
 end
 
-function clean_noise_svg(path, rows)
+function clean_noise_svg(path, rows, endpoint="parameter_error")
     body=IOBuffer(); x0,y0,w,h=145,75,680,380
     policies=("random","fixed_design","scientist"); colors=("#4575b4","#d73027","#1a9850")
-    vals=Float64[r.mean for r in rows if r.endpoint=="parameter_error" && r.mean!==missing]
+    vals=Float64[r.mean for r in rows if r.endpoint==endpoint && r.mean!==missing]
     maxv=max(maximum(vals;init=0.01)*1.15,0.01)
     println(body,"<line class=\"axis\" x1=\"$x0\" y1=\"$(y0+h)\" x2=\"$(x0+w)\" y2=\"$(y0+h)\"/><line class=\"axis\" x1=\"$x0\" y1=\"$y0\" x2=\"$x0\" y2=\"$(y0+h)\"/>")
     for i in 0:4
@@ -353,15 +353,15 @@ function clean_noise_svg(path, rows)
     end
     for (i,p) in enumerate(policies)
         for (j,c) in enumerate(("clean","gaussian_0.10"))
-            row=only(filter(r->r.policy==p&&r.condition_id==c&&r.endpoint=="parameter_error",rows))
+            row=only(filter(r->r.policy==p&&r.condition_id==c&&r.endpoint==endpoint,rows))
             x=x0+(i-1)*w/3+w/6+(j==1 ? -14 : 14); barh=Float64(row.mean)/maxv*h
             println(body,"<rect x=\"$(x-9)\" y=\"$(y0+h-barh)\" width=\"18\" height=\"$barh\" fill=\"$(colors[i])\" fill-opacity=\"$(j==1 ? ".5" : ".95")\"/><text class=\"small\" x=\"$x\" y=\"$(y0+h-barh-5)\" text-anchor=\"middle\">$(round(row.mean,digits=3))</text>")
         end
         x=x0+(i-.5)*w/3
         println(body,"<text class=\"label\" x=\"$x\" y=\"$(y0+h+24)\" text-anchor=\"middle\">$(p)</text>")
     end
-    println(body,"<text class=\"small\" x=\"$(x0+w-5)\" y=\"50\" text-anchor=\"end\">pale = clean; solid = gaussian_0.10</text><text class=\"label\" transform=\"translate(25 $(y0+h/2)) rotate(-90)\" text-anchor=\"middle\">Mean parameter error</text>")
-    svgwrite(path,"Clean vs Gaussian descriptive parameter error",String(take!(body)))
+    println(body,"<text class=\"small\" x=\"$(x0+w-5)\" y=\"50\" text-anchor=\"end\">pale = clean; solid = gaussian_0.10</text><text class=\"label\" transform=\"translate(25 $(y0+h/2)) rotate(-90)\" text-anchor=\"middle\">Mean $(endpoint)</text>")
+    svgwrite(path,"Clean vs Gaussian descriptive $(endpoint)",String(take!(body)))
 end
 
 function efficiency_svg(path, rows)
@@ -575,6 +575,7 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
     point_svg(joinpath(figs,"prediction-error-distributions.svg"),"Held-out prediction error — gaussian_0.10 retained paired worlds",runmetrics,:prediction_error)
     effects_svg(joinpath(figs,"primary-paired-endpoints.svg"),effects)
     clean_noise_svg(joinpath(figs,"clean-vs-noisy.svg"),policy_descriptive)
+    clean_noise_svg(joinpath(figs,"clean-vs-noisy-prediction.svg"),policy_descriptive,"prediction_error")
     # Compact failure plot including the separated behavioral/infrastructure categories.
     flabels=String[]; fvals=Float64[]; fcolors=String[]
     for r in failure_rows
