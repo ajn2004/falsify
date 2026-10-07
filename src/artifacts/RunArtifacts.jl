@@ -151,6 +151,32 @@ function _git_value(root, args...)
     end
 end
 
+function _repository_value(root, git_args...)
+    value = _git_value(root, git_args...)
+    value === nothing || return value
+    # The project is maintained in Jujutsu workspaces which may not have a
+    # colocated .git directory. Keep provenance useful there without guessing.
+    args = git_args == ("rev-parse", "HEAD") ? ["log", "--no-graph", "-r", "@", "-T", "commit_id"] :
+        git_args == ("status", "--porcelain") ? ["status"] : String[]
+    isempty(args) && return nothing
+    try
+        text = strip(read(pipeline(Cmd(["jj", "-R", String(root), args...]); stderr=devnull), String))
+        git_args == ("status", "--porcelain") && return occursin("working copy has no changes", text) ? "" : text
+        isempty(text) ? nothing : text
+    catch
+        nothing
+    end
+end
+
+function _source_dirty_text(text)
+    prefixes = ("results/raw/", "results/confirmatory-v0.1/")
+    filter(line -> begin
+        length(line) >= 4 || return true
+        path = replace(line[4:end], r"^\"|\"$" => "")
+        !any(prefix -> startswith(path, prefix), prefixes)
+    end, split(text, '\n'; keepempty=false)) |> lines -> join(lines, "\n")
+end
+
 """Capture best-effort host/repository provenance. Unknown Git state remains `nothing`."""
 function capture_provenance(run_id::String; root=pwd(), world=nothing, world_seed=nothing, noise_seed=nothing,
         policy_seed=nothing, repetition_id=nothing, configuration=(;))
@@ -166,8 +192,9 @@ function capture_provenance(run_id::String; root=pwd(), world=nothing, world_see
             final_time_s=config.final_time, sample_count=config.sample_count)
         configuration = merge(configuration, environment)
     end
-    commit = _git_value(root, "rev-parse", "HEAD")
-    dirty_text = _git_value(root, "status", "--porcelain")
+    commit = _repository_value(root, "rev-parse", "HEAD")
+    dirty_text = _repository_value(root, "status", "--porcelain")
+    dirty_text === nothing || (dirty_text = _source_dirty_text(dirty_text))
     manifest = joinpath(root, "Manifest.toml")
     manifest_hash = isfile(manifest) ? bytes2hex(sha256(read(manifest))) : nothing
     ProvenanceArtifact(SCHEMA_VERSION, run_id, commit, dirty_text === nothing ? nothing : !isempty(dirty_text),

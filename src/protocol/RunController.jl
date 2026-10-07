@@ -83,7 +83,7 @@ struct RunAttempt
 end
 
 function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
-        root=pwd(), run_id=new_run_id(), repetition_id=nothing, condition_id=nothing)
+        root=pwd(), run_id=new_run_id(), repetition_id=nothing, condition_id=nothing, protocol_id=nothing)
     task = public_task(world); limits = limits_for(task)
     events = RunEvent[]; history = DecisionHistoryEntry[]
     remaining = config.intervention_budget
@@ -163,7 +163,7 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
         policy_identity=ident, events=Tuple(events), terminal)
     provenance = capture_provenance(run_id; root, world, noise_seed=config.noise_seed,
         policy_seed=policy_seed(policy), repetition_id,
-        configuration=(policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
+        configuration=(protocol_id, policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
             retry_allowance=config.max_decision_opportunities-config.intervention_budget,
             noise_condition=config.observation_noise isa CleanObservation ? "clean" : "gaussian",
             sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
@@ -182,7 +182,7 @@ end
 _exception_name(failure) = failure === nothing ? nothing : string(nameof(typeof(failure)))
 
 function _aborted_outcome(world::OscillatorWorld, policy, config::RunConfig, run_id;
-        root, repetition_id, condition_id, failure)
+        root, repetition_id, condition_id, protocol_id, failure)
     task = public_task(world); limits = limits_for(task)
     ident = try policy_identity(policy) catch; PolicyIdentity("unidentified") end
     terminal = TerminalResult("aborted", nothing,
@@ -194,7 +194,7 @@ function _aborted_outcome(world::OscillatorWorld, policy, config::RunConfig, run
         events=(), terminal)
     provenance = capture_provenance(run_id; root, world, noise_seed=config.noise_seed,
         policy_seed=try policy_seed(policy) catch; nothing end, repetition_id,
-        configuration=(aborted_before_finalization=true,
+        configuration=(protocol_id, aborted_before_finalization=true,
             condition_id=condition_id,
             noise_condition=config.observation_noise isa CleanObservation ? "clean" : "gaussian",
             sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
@@ -235,16 +235,16 @@ Returns a `RunAttempt`; the ledger is evaluator-side bookkeeping.
 """
 function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
         root=pwd(), artifacts_root=nothing, ledger_path=nothing,
-        repetition_id=nothing, condition_id=nothing)
-    run_id = new_run_id()
+        repetition_id=nothing, condition_id=nothing, protocol_id=nothing, run_id=new_run_id())
+    run_id = String(run_id)
     outcome = nothing; failure = nothing
     try
-        outcome = run_experiment(world, policy, config; root, run_id, repetition_id, condition_id)
+        outcome = run_experiment(world, policy, config; root, run_id, repetition_id, condition_id, protocol_id)
     catch caught
         failure = caught
         outcome = try
             _aborted_outcome(world, policy, config, run_id; root, repetition_id,
-                condition_id, failure)
+                condition_id, protocol_id, failure)
         catch
             nothing
         end
