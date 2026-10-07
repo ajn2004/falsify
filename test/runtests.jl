@@ -4,6 +4,39 @@ using Test
 using UUIDs
 
 include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_1.jl"))
+
+@testset "V0.1 attempt-level frozen score materialization" begin
+    M = ConfirmatoryScoreMaterializer
+    root = normpath(joinpath(@__DIR__, ".."))
+    rows = M.attempt_records(root)
+    @test length(rows) == 140
+    @test count(r -> r.score_status == "unscored_infrastructure", rows) == 31
+    @test count(r -> r.score_status == "scored_behavioral_failure", rows) == 4
+    @test all(r -> r.protocol_id == "falsify-v0.1-prereg-4", rows)
+    @test all(r -> r.score_status != "unscored_infrastructure" ||
+        (r.parameter_error === nothing && r.prediction_error === nothing), rows)
+    @test all(r -> r.classification != "behavioral_failure" ||
+        (r.parameter_error == 1.0 && r.prediction_error == 1.0), rows)
+    @test !any(occursin("damping_ratio", String(k)) || occursin("natural_frequency", String(k))
+        for k in keys(M.score_row(first(rows))))
+
+    completed = first(filter(r -> r.classification == "completed", rows))
+    rawdir = joinpath(root, "results", "raw")
+    artifact_dir = joinpath(rawdir, completed.run_id)
+    direct = score_run(load_run(artifact_dir))
+    @test completed.parameter_error == direct.parameter_error
+    @test completed.prediction_error == direct.heldout_prediction_error
+    @test completed.parameter_success == direct.success
+
+    raw_hash = M.file_tree_hash(rawdir)
+    execution_hash = M.file_tree_hash(joinpath(root, "results", "confirmatory-v0.1-prereg-4"))
+    rerun = M.attempt_records(root)
+    @test map(M.score_row, rows) == map(M.score_row, rerun)
+    @test M.file_tree_hash(rawdir) == raw_hash
+    @test M.file_tree_hash(joinpath(root, "results", "confirmatory-v0.1-prereg-4")) == execution_hash
+    @test all(r -> !hasproperty(r, :hypothesis) && !hasproperty(r, :paired_difference), rows)
+end
 
 @testset "DAL-124 frozen confirmatory matrix" begin
     root = normpath(joinpath(@__DIR__, ".."))
