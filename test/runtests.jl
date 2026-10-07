@@ -22,6 +22,18 @@ include(joinpath(@__DIR__, "..", "scripts", "analyze_confirmatory_v0_1.jl"))
     @test !any(occursin("damping_ratio", String(k)) || occursin("natural_frequency", String(k))
         for k in keys(M.score_row(first(rows))))
 
+    mktempdir() do temp
+        rawdir = joinpath(temp, "results", "raw")
+        mkpath(joinpath(rawdir, "prereg-run"))
+        write(joinpath(rawdir, "prereg-run", "public.json"), "original")
+        scoped = M.protocol_artifact_hash(temp, ["prereg-run", "missing-run"])
+        mkpath(joinpath(rawdir, "future-run"))
+        write(joinpath(rawdir, "future-run", "public.json"), "unrelated")
+        @test M.protocol_artifact_hash(temp, ["missing-run", "prereg-run"]) == scoped
+        write(joinpath(rawdir, "prereg-run", "public.json"), "modified")
+        @test M.protocol_artifact_hash(temp, ["prereg-run", "missing-run"]) != scoped
+    end
+
     completed = first(filter(r -> r.classification == "completed", rows))
     rawdir = joinpath(root, "results", "raw")
     artifact_dir = joinpath(rawdir, completed.run_id)

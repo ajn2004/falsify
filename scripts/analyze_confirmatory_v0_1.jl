@@ -17,6 +17,22 @@ export analyze, resolve_attempts, paired_bootstrap
 readj(path) = JSON3.read(read(path, String))
 readlines_json(path) = [JSON3.read(line) for line in eachline(path) if !isempty(strip(line))]
 filehash(path) = bytes2hex(sha256(read(path)))
+function protocol_artifact_hash(root, run_ids)
+    rows=String[]
+    raw=joinpath(root,"results","raw")
+    for run_id in sort!(unique!(String.(collect(run_ids))))
+        dir=joinpath(raw,run_id)
+        if !isdir(dir)
+            push!(rows,"$run_id:MISSING")
+            continue
+        end
+        for (current,_,files) in walkdir(dir), file in sort(files)
+            path=joinpath(current,file)
+            push!(rows,"$run_id/$(relpath(path,dir)):"*filehash(path))
+        end
+    end
+    bytes2hex(sha256(join(sort!(rows),"\n")))
+end
 
 function csvval(v)
     v === nothing && return ""
@@ -60,6 +76,8 @@ function validate_provenance(root, planpath, ledgerpath)
     ep.run_ledger_sha256 == filehash(ledgerpath) || error("run ledger hash mismatch")
     ep.run_scores_jsonl_sha256 == filehash(joinpath(root,SCORES,"run_scores.jsonl")) || error("run_scores.jsonl hash mismatch")
     ep.run_scores_csv_sha256 == filehash(joinpath(root,SCORES,"run_scores.csv")) || error("run_scores.csv hash mismatch")
+    prereg4_run_ids = (String(row.run_id) for row in readlines_json(ledgerpath))
+    ep.raw_artifacts_sha256 == protocol_artifact_hash(root,prereg4_run_ids) || error("prereg-4 raw artifact hash mismatch")
     ep.score_run_source_sha256 == filehash(joinpath(root,"src","evaluation","Metrics.jl")) || error("frozen scorer source hash mismatch")
     ep.attempts_considered == 140 && ep.scientifically_scored == 109 &&
         ep.behavioral_failure_scored == 4 && ep.infrastructure_unscored == 31 ||
@@ -597,18 +615,14 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
     valid_scientist=[r for r in runmetrics if r.policy=="scientist"]
     efficiency_svg(joinpath(figs,"intervention-use.svg"),runmetrics)
 
-    analysis_commit=try
-        strip(read(`git -C $root rev-parse HEAD`,String))
-    catch
-        strip(read(`jj -R $root log -r 'heads(::@ & ~empty())' --no-graph -T commit_id`,String))
-    end
     metadata=(protocol_id=PROTOCOL, execution_commit=String(resolution.plan.commit),
-        analysis_commit=analysis_commit,
         analysis_source_sha256=filehash(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl")),
         julia_version=string(VERSION),
         manifest_sha256=filehash(joinpath(root,"Manifest.toml")), execution_plan_sha256=filehash(resolution.planpath),
         execution_state_sha256=filehash(resolution.statepath),ledger_sha256=filehash(resolution.ledgerpath),
         journal_sha256=filehash(resolution.journalpath),evaluator_materialization_provenance_sha256=filehash(joinpath(root,SCORES,"evaluation-provenance.json")),
+        raw_artifacts_sha256=ep.raw_artifacts_sha256,
+        run_scores_jsonl_sha256=ep.run_scores_jsonl_sha256,run_scores_csv_sha256=ep.run_scores_csv_sha256,
         bootstrap_seed=BOOTSTRAP_SEED,bootstrap_resamples=BOOTSTRAPS,analysis_timestamp_utc=string(Dates.now(Dates.UTC)))
     jsonwrite(joinpath(out,"analysis-provenance.json"),metadata)
     write_findings(root, kept, excluded, effects, h1, h2, failure_rows, ops, policy_descriptive,clean_compare,worldrows,success_rows,terminal,behavioral_worlds)

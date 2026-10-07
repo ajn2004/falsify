@@ -9,7 +9,7 @@ const PROTOCOL = "falsify-v0.1-prereg-4"
 const EXECUTION = "results/confirmatory-v0.1-prereg-4"
 const OUTPUT = "results/derived/v0.1-evaluator"
 
-export materialize, attempt_records, score_row
+export materialize, attempt_records, score_row, protocol_artifact_hash
 
 function sha256_file(path)
     bytes2hex(sha256(read(path)))
@@ -47,6 +47,25 @@ function file_tree_hash(root)
         end
     end
     bytes2hex(sha256(join(sort(rows), "\n")))
+end
+
+function protocol_artifact_hash(root, run_ids)
+    rows = String[]
+    raw = joinpath(root, "results", "raw")
+    for run_id in sort!(unique!(String.(collect(run_ids))))
+        dir = joinpath(raw, run_id)
+        if !isdir(dir)
+            push!(rows, "$run_id:MISSING")
+            continue
+        end
+        for (current, _, files) in walkdir(dir)
+            for file in sort(files)
+                path = joinpath(current, file)
+                push!(rows, "$run_id/$(relpath(path, dir)):" * sha256_file(path))
+            end
+        end
+    end
+    bytes2hex(sha256(join(sort!(rows), "\n")))
 end
 
 function read_jsonl(path)
@@ -170,12 +189,12 @@ score_row(row) = NamedTuple{Tuple(Symbol.(FIELDS))}(Tuple(getproperty(row, Symbo
 
 function materialize(root=normpath(joinpath(@__DIR__, "..")))
     VERSION == v"1.12.7" || error("Julia 1.12.7 required; found $VERSION")
-    raw = joinpath(root, "results", "raw")
     execution = joinpath(root, EXECUTION)
-    raw_before, execution_before = file_tree_hash(raw), file_tree_hash(execution)
+    execution_before = file_tree_hash(execution)
     plan_path = joinpath(execution, "execution-plan.json")
     ledger_path = joinpath(execution, "run-ledger.jsonl")
     rows = attempt_records(root)
+    raw_before = protocol_artifact_hash(root, (row.run_id for row in rows))
     output = joinpath(root, OUTPUT)
     mkpath(output)
     rows_path = map(score_row, rows)
@@ -183,18 +202,13 @@ function materialize(root=normpath(joinpath(@__DIR__, "..")))
     jsonl(joinpath(output, "run_scores.jsonl"), rows_path)
     source_file = joinpath(root, "src", "evaluation", "Metrics.jl")
     materializer_source_file = joinpath(root, "scripts", "materialize_confirmatory_scores_v0_1.jl")
-    materialization_commit = try
-        strip(read(`git -C $root rev-parse HEAD`, String))
-    catch
-        strip(read(`jj -R $root log -r 'heads(::@ & ~empty())' --no-graph -T commit_id`, String))
-    end
     provenance = (schema_version=1, protocol_id=PROTOCOL,
         execution_commit=String(JSON3.read(read(plan_path, String)).commit),
-        materialization_commit=materialization_commit,
         materializer_source_sha256=sha256_file(materializer_source_file),
         julia_version=string(VERSION), manifest_sha256=sha256_file(joinpath(root, "Manifest.toml")),
         score_run_source_sha256=sha256_file(source_file),
         execution_plan_sha256=sha256_file(plan_path), run_ledger_sha256=sha256_file(ledger_path),
+        raw_artifacts_sha256=raw_before, execution_inputs_sha256=execution_before,
         run_scores_jsonl_sha256=sha256_file(joinpath(output, "run_scores.jsonl")),
         run_scores_csv_sha256=sha256_file(joinpath(output, "run_scores.csv")),
         attempts_considered=length(rows), scientifically_scored=count(r -> r.score_status in ("scored", "scored_behavioral_failure"), rows),
@@ -204,7 +218,7 @@ function materialize(root=normpath(joinpath(@__DIR__, "..")))
     open(joinpath(output, "evaluation-provenance.json"), "w") do io
         println(io, JSON3.write(provenance))
     end
-    raw_before == file_tree_hash(raw) || error("raw artifacts changed during materialization")
+    raw_before == protocol_artifact_hash(root, (row.run_id for row in rows)) || error("prereg-4 raw artifacts changed during materialization")
     execution_before == file_tree_hash(execution) || error("execution inputs changed during materialization")
     println("attempts: $(length(rows)); scored: $(provenance.scientifically_scored); behavioral failures: $(provenance.behavioral_failure_scored); infrastructure unscored: $(provenance.infrastructure_unscored)")
     println("scores: $output/run_scores.csv and $output/run_scores.jsonl")
