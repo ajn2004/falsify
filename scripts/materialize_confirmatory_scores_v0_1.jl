@@ -186,7 +186,7 @@ function materialize(root=normpath(joinpath(@__DIR__, "..")))
     materialization_commit = try
         strip(read(`git -C $root rev-parse HEAD`, String))
     catch
-        strip(read(`jj -R $root log -r @ --no-graph -T commit_id`, String))
+        strip(read(`jj -R $root log -r 'heads(::@ & ~empty())' --no-graph -T commit_id`, String))
     end
     provenance = (schema_version=1, protocol_id=PROTOCOL,
         execution_commit=String(JSON3.read(read(plan_path, String)).commit),

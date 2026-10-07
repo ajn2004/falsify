@@ -600,7 +600,7 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
     analysis_commit=try
         strip(read(`git -C $root rev-parse HEAD`,String))
     catch
-        strip(read(`jj -R $root log -r @ --no-graph -T commit_id`,String))
+        strip(read(`jj -R $root log -r 'heads(::@ & ~empty())' --no-graph -T commit_id`,String))
     end
     metadata=(protocol_id=PROTOCOL, execution_commit=String(resolution.plan.commit),
         analysis_commit=analysis_commit,
