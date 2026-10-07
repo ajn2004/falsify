@@ -58,6 +58,8 @@ function validate_provenance(root, planpath, ledgerpath)
     ep.manifest_sha256 == filehash(joinpath(root, "Manifest.toml")) || error("Manifest hash mismatch")
     ep.execution_plan_sha256 == filehash(planpath) || error("execution plan hash mismatch")
     ep.run_ledger_sha256 == filehash(ledgerpath) || error("run ledger hash mismatch")
+    ep.run_scores_jsonl_sha256 == filehash(joinpath(root,SCORES,"run_scores.jsonl")) || error("run_scores.jsonl hash mismatch")
+    ep.run_scores_csv_sha256 == filehash(joinpath(root,SCORES,"run_scores.csv")) || error("run_scores.csv hash mismatch")
     ep.score_run_source_sha256 == filehash(joinpath(root,"src","evaluation","Metrics.jl")) || error("frozen scorer source hash mismatch")
     ep.attempts_considered == 140 && ep.scientifically_scored == 109 &&
         ep.behavioral_failure_scored == 4 && ep.infrastructure_unscored == 31 ||
@@ -175,7 +177,7 @@ function resolve_attempts(root)
             status=String(l.status), classification=String(l.classification),
             score_status=String(r.score_status), parameter_error=r.parameter_error,
             prediction_error=r.prediction_error, parameter_success=r.parameter_success,
-            artifact_dir=l.artifact_dir, interventions_used=Int(l.interventions_used),
+            artifact_dir=joinpath("results","raw",id), interventions_used=Int(l.interventions_used),
             decision_opportunities_used=Int(l.decision_opportunities_used),
             invalid_action_count=Int(l.invalid_action_count), terminal_failure_code=l.terminal_failure_code))
     end
@@ -354,7 +356,12 @@ function clean_noise_svg(path, rows, endpoint="parameter_error")
     for (i,p) in enumerate(policies)
         for (j,c) in enumerate(("clean","gaussian_0.10"))
             row=only(filter(r->r.policy==p&&r.condition_id==c&&r.endpoint==endpoint,rows))
-            x=x0+(i-1)*w/3+w/6+(j==1 ? -14 : 14); barh=Float64(row.mean)/maxv*h
+            x=x0+(i-1)*w/3+w/6+(j==1 ? -14 : 14)
+            if p=="scientist" && c=="clean"
+                println(body,"<text class=\"small\" x=\"$x\" y=\"$(y0+h-12)\" text-anchor=\"middle\">n=3; no usable sample</text>")
+                continue
+            end
+            barh=Float64(row.mean)/maxv*h
             println(body,"<rect x=\"$(x-9)\" y=\"$(y0+h-barh)\" width=\"18\" height=\"$barh\" fill=\"$(colors[i])\" fill-opacity=\"$(j==1 ? ".5" : ".95")\"/><text class=\"small\" x=\"$x\" y=\"$(y0+h-barh-5)\" text-anchor=\"middle\">$(round(row.mean,digits=3))</text>")
         end
         x=x0+(i-.5)*w/3
@@ -396,7 +403,7 @@ function operation_totals(root, ledger)
     bypolicy=Dict{String,Dict{String,Float64}}(); missing_by_policy=Dict{String,Dict{String,Int}}()
     for l in ledger
         l.artifact_dir===nothing && continue
-        d=String(l.artifact_dir); d=isabspath(d) ? d : joinpath(root,d)
+        d=joinpath(root,"results","raw",String(l.run_id))
         pub=readj(joinpath(d,"public.json")); p=String(pub.policy_identity.name)
         a=get!(bypolicy,p,Dict("requests"=>0.0,"input_tokens"=>0.0,"output_tokens"=>0.0,"cost"=>0.0,"latency_s"=>0.0))
         mcount=get!(missing_by_policy,p,Dict("input_tokens"=>0,"output_tokens"=>0,"cost"=>0,"latency_s"=>0))
@@ -590,8 +597,15 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
     valid_scientist=[r for r in runmetrics if r.policy=="scientist"]
     efficiency_svg(joinpath(figs,"intervention-use.svg"),runmetrics)
 
+    analysis_commit=try
+        strip(read(`git -C $root rev-parse HEAD`,String))
+    catch
+        strip(read(`jj -R $root log -r @ --no-graph -T commit_id`,String))
+    end
     metadata=(protocol_id=PROTOCOL, execution_commit=String(resolution.plan.commit),
-        analysis_commit=strip(read(`git -C $root rev-parse HEAD`,String)), julia_version=string(VERSION),
+        analysis_commit=analysis_commit,
+        analysis_source_sha256=filehash(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl")),
+        julia_version=string(VERSION),
         manifest_sha256=filehash(joinpath(root,"Manifest.toml")), execution_plan_sha256=filehash(resolution.planpath),
         execution_state_sha256=filehash(resolution.statepath),ledger_sha256=filehash(resolution.ledgerpath),
         journal_sha256=filehash(resolution.journalpath),evaluator_materialization_provenance_sha256=filehash(joinpath(root,SCORES,"evaluation-provenance.json")),
@@ -642,7 +656,7 @@ Primary preregistered worlds: 30. Retained matched blocks: $(length(kept)). Excl
             println(io,"| $(r.policy) | $(r.endpoint) | $(r.n) | $(r.mean) | $(r.median) | $(r.q25) | $(r.q75) |")
         end
         println(io,"\nSuccess threshold is `parameter_error ≤ 0.10`; counts are descriptive in `success_summary.csv`.\n")
-        println(io,"\n## Clean descriptive condition\n\nClean results are descriptive only and do not enter H1/H2.\n\n| Policy | Endpoint | N | Mean | Median |\n|---|---|---:|---:|---:|")
+        println(io,"\n## Clean descriptive condition\n\nClean results are descriptive only and do not enter H1/H2. ScientistPolicy had zero successful completions: 7/10 slots ended in terminal infrastructure failure, and the remaining 3 were behavioral failures scored 1.0. Thus the reported clean ScientistPolicy mean is three behavioral penalty scores, not a usable clean-observation performance sample; it must not be interpreted as evidence that clean observations worsen performance.\n\n| Policy | Endpoint | N | Mean | Median |\n|---|---|---:|---:|---:|")
         for r in filter(x->x.condition_id=="clean",descriptive)
             println(io,"| $(r.policy) | $(r.endpoint) | $(r.n) | $(r.mean) | $(r.median) |")
         end
@@ -661,7 +675,7 @@ Primary preregistered worlds: 30. Retained matched blocks: $(length(kept)). Excl
         end
         println(io,"\n## Cost and latency\n\nReconstructed from persisted operational metadata: $(ops.actual.requests) requests, $(ops.actual.input_tokens) input tokens, $(ops.actual.output_tokens) output tokens, \$$(ops.actual.cost) recorded cost, $(ops.actual.latency) s summed recorded latency. These totals exactly match the executor summary. ScientistPolicy requests are included across both conditions and all attempts. Per-policy details and the explicit count of missing per-request metadata are in `operational_summary.csv` and `operational_metadata_missing.csv` respectively. Missing values were not recoded to zero.\n")
         println(io,"\n## Exploratory efficiency observations\n\nRun-level final scores are paired with valid interventions and decision opportunities in `run_metrics.csv`; `intervention-use.svg` is descriptive. The repository has no frozen prefix-scoring mechanism. Full prefix error trajectories require a separately specified evaluator extension; no new estimator was introduced here.\n")
-        println(io,"\n## Limitations\n\nThis is one controlled damped-oscillator task, one model treatment, and one scientist repetition per preregistered world. It does not establish general scientific reasoning or adaptive superiority over an LLM open-loop design. Infrastructure exclusions reduce the matched primary population.\n")
+        println(io,"\n## Limitations\n\nThis is one controlled damped-oscillator task, one model treatment, and one scientist repetition per preregistered world. It does not establish general scientific reasoning or adaptive superiority over an LLM open-loop design. Infrastructure exclusions reduce the matched primary population and create policy-specific, potentially informative missingness: all four excluded gaussian worlds (8123003, 8123013, 8123023, 8123028) were excluded because the ScientistPolicy slot failed infrastructure twice. The complete-case contrast therefore does not represent an unconditionally observed policy population.\n")
         println(io,"\n## Exact reproducibility commands\n\n```bash\njulia +1.12.7 --project=. scripts/analyze_confirmatory_v0_1.jl\n```\n")
     end
 end

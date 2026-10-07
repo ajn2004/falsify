@@ -126,7 +126,8 @@ function attempt_records(root)
             prediction_error=nothing, parameter_success=nothing)
         if l.classification != "infrastructure"
             l.artifact_dir === nothing && error("scientifically valid run lacks persisted artifact: $id")
-            artdir = isabspath(String(l.artifact_dir)) ? String(l.artifact_dir) : joinpath(root, String(l.artifact_dir))
+            # Ledger artifact_dir is provenance/audit metadata; run_id is the portable identity.
+            artdir = joinpath(root, "results", "raw", id)
             all(isfile(joinpath(artdir, f)) for f in ("public.json", "provenance.json", "evaluator.json")) ||
                 error("incomplete artifact directory for $id")
             records = Falsify.load_run(artdir)
@@ -147,8 +148,7 @@ function attempt_records(root)
                 parameter_success=metrics.success)))
         else
             if l.artifact_dir !== nothing
-                artdir = String(l.artifact_dir)
-                artdir = isabspath(artdir) ? artdir : joinpath(root, artdir)
+                artdir = joinpath(root, "results", "raw", id)
                 if all(isfile(joinpath(artdir, f)) for f in ("public.json", "provenance.json", "evaluator.json"))
                     records = Falsify.load_run(artdir)
                     records.public.run_id == records.provenance.run_id == records.evaluator.run_id == id || error("artifact/ledger run ID mismatch for $id")
@@ -182,12 +182,21 @@ function materialize(root=normpath(joinpath(@__DIR__, "..")))
     write_csv(joinpath(output, "run_scores.csv"), rows_path, FIELDS)
     jsonl(joinpath(output, "run_scores.jsonl"), rows_path)
     source_file = joinpath(root, "src", "evaluation", "Metrics.jl")
+    materializer_source_file = joinpath(root, "scripts", "materialize_confirmatory_scores_v0_1.jl")
+    materialization_commit = try
+        strip(read(`git -C $root rev-parse HEAD`, String))
+    catch
+        strip(read(`jj -R $root log -r @ --no-graph -T commit_id`, String))
+    end
     provenance = (schema_version=1, protocol_id=PROTOCOL,
         execution_commit=String(JSON3.read(read(plan_path, String)).commit),
-        materialization_commit=strip(read(`git -C $root rev-parse HEAD`, String)),
+        materialization_commit=materialization_commit,
+        materializer_source_sha256=sha256_file(materializer_source_file),
         julia_version=string(VERSION), manifest_sha256=sha256_file(joinpath(root, "Manifest.toml")),
         score_run_source_sha256=sha256_file(source_file),
         execution_plan_sha256=sha256_file(plan_path), run_ledger_sha256=sha256_file(ledger_path),
+        run_scores_jsonl_sha256=sha256_file(joinpath(output, "run_scores.jsonl")),
+        run_scores_csv_sha256=sha256_file(joinpath(output, "run_scores.csv")),
         attempts_considered=length(rows), scientifically_scored=count(r -> r.score_status in ("scored", "scored_behavioral_failure"), rows),
         behavioral_failure_scored=count(r -> r.score_status == "scored_behavioral_failure", rows),
         infrastructure_unscored=count(r -> r.score_status == "unscored_infrastructure", rows),

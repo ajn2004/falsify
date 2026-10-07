@@ -67,10 +67,10 @@ Success threshold is `parameter_error ≤ 0.10`; counts are descriptive in `succ
 
 ## Clean descriptive condition
 
-Clean results are descriptive only and do not enter H1/H2.
+Clean results are descriptive only and do not enter H1/H2. ScientistPolicy had zero successful completions: 7/10 slots ended in terminal infrastructure failure, and the remaining 3 were behavioral failures scored 1.0. Thus the reported clean ScientistPolicy mean is three behavioral penalty scores, not a usable clean-observation performance sample; it must not be interpreted as evidence that clean observations worsen performance.
 
 | Policy | Endpoint | N | Mean | Median |
-|---|---|---:|---:|---:|
+|---|---|---:|---:|---:|---:|
 | random | parameter_error | 10 | 1.6219584742792506e-9 | 1.5629205749649166e-9 |
 | random | prediction_error | 10 | 4.5947633152818127e-10 | 4.226305968461268e-10 |
 | fixed_design | parameter_error | 10 | 1.6219584563623355e-9 | 1.5629205749649166e-9 |
@@ -122,7 +122,7 @@ Run-level final scores are paired with valid interventions and decision opportun
 
 ## Limitations
 
-This is one controlled damped-oscillator task, one model treatment, and one scientist repetition per preregistered world. It does not establish general scientific reasoning or adaptive superiority over an LLM open-loop design. Infrastructure exclusions reduce the matched primary population.
+This is one controlled damped-oscillator task, one model treatment, and one scientist repetition per preregistered world. It does not establish general scientific reasoning or adaptive superiority over an LLM open-loop design. Infrastructure exclusions reduce the matched primary population and create policy-specific, potentially informative missingness: all four excluded gaussian worlds (8123003, 8123013, 8123023, 8123028) were excluded because the ScientistPolicy slot failed infrastructure twice. The complete-case contrast therefore does not represent an unconditionally observed policy population.
 
 
 ## Exact reproducibility commands
