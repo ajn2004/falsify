@@ -39,10 +39,10 @@ end
 
 @testset "DAL-124 restart invariants" begin
     @test isempty(Falsify.RunArtifacts._source_dirty_text(
-        " A results/confirmatory-v0.1/execution-state.json\n" *
+        " A results/confirmatory-v0.1-prereg-4/execution-state.json\n" *
         " A results/raw/abc/public.json"))
     @test !isempty(Falsify.RunArtifacts._source_dirty_text(
-        " A results/raw/abc/public.json\n" *
+        " A results/confirmatory-v0.1-prereg-4/execution-state.json\n" *
         " M src/Falsify.jl"))
     @test Falsify.classify_run("completed", nothing) == "completed"
     @test Falsify.classify_run("failed", "provider_unavailable") == "infrastructure"
@@ -70,7 +70,7 @@ end
         run(`git -C $dir init -q`)
         run(`git -C $dir -c user.name=test -c user.email=test@example.com commit --allow-empty -qm init`)
         mkpath(joinpath(dir, "results", "raw")); write(joinpath(dir, "results", "raw", "out"), "ok")
-        mkpath(joinpath(dir, "results", "confirmatory-v0.1")); write(joinpath(dir, "results", "confirmatory-v0.1", "state"), "ok")
+        mkpath(joinpath(dir, "results", "confirmatory-v0.1-prereg-4")); write(joinpath(dir, "results", "confirmatory-v0.1-prereg-4", "state"), "ok")
         @test isempty(ConfirmatoryV01._source_dirty(dir))
         mkpath(joinpath(dir, "results", "raw"))
         write(joinpath(dir, "results", "raw", "example"), "intent to add")

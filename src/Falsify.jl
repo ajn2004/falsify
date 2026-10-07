@@ -1,6 +1,8 @@
 
 module Falsify
 
+const RUNTIME_OUTPUT_PREFIXES = ("results/raw/", "results/confirmatory-v0.1-prereg-4/")
+
 using OrdinaryDiffEqTsit5: Tsit5
 using Random: MersenneTwister, rand, randn
 using SciMLBase: ODEProblem, solve

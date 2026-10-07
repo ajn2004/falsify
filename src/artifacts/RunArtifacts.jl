@@ -4,7 +4,8 @@ using Dates
 using JSON3
 using SHA
 using UUIDs
-import ..Falsify: ActionLimits, ExperimentAction, Observation, OscillatorWorld, OperationalMetadata, evaluator_truth, metadata
+import ..Falsify: ActionLimits, ExperimentAction, Observation, OscillatorWorld, OperationalMetadata,
+    RUNTIME_OUTPUT_PREFIXES, evaluator_truth, metadata
 
 export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
        PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
@@ -171,11 +172,10 @@ function _repository_value(root, git_args...)
 end
 
 function _source_dirty_text(text)
-    prefixes = ("results/raw/", "results/confirmatory-v0.1/")
     filter(line -> begin
         length(line) >= 4 || return true
         path = replace(line[4:end], r"^\"|\"$" => "")
-        !any(prefix -> startswith(path, prefix), prefixes)
+        !any(prefix -> startswith(path, prefix), RUNTIME_OUTPUT_PREFIXES)
     end, split(text, '\n'; keepempty=false)) |> lines -> join(lines, "\n")
 end
 

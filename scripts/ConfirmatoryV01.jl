@@ -86,7 +86,7 @@ function _repo(root, mode)
     end
 end
 
-const RUNTIME_OUTPUT_PREFIXES = ("results/raw/", "results/confirmatory-v0.1/", "results/confirmatory-v0.1-prereg-4/")
+const RUNTIME_OUTPUT_PREFIXES = Falsify.RUNTIME_OUTPUT_PREFIXES
 
 function _source_dirty(root)
     lines = filter(!isempty, split(_repo(root, :dirty), '\n'))
