@@ -1,4 +1,65 @@
 using Falsify
+using TOML
+using Test
+
+include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
+
+@testset "DAL-124 frozen confirmatory matrix" begin
+    root = normpath(joinpath(@__DIR__, ".."))
+    seeds = TOML.parsefile(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
+    slots = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
+    @test length(slots) == 300
+    @test count(s -> s["policy"] == "scientist", slots) == 180
+    @test count(s -> s["policy"] == "random", slots) == 60
+    @test count(s -> s["policy"] == "fixed_design", slots) == 60
+    @test Set(s["world_seed"] for s in slots if s["condition_id"] == "gaussian_0.10") == Set(w["world_seed"] for w in seeds["worlds"])
+    @test Set(s["world_seed"] for s in slots if s["condition_id"] == "clean") == Set(w["world_seed"] for w in seeds["worlds"])
+    @test Set(s["scientist_repetition_id"] for s in slots if s["policy"] == "scientist") == Set([1,2,3])
+    @test all(s["intervention_budget"] == 8 && s["max_decision_opportunities"] == 16 for s in slots)
+    @test all(s["noise_seed"] == only(filter(w -> w["world_seed"] == s["world_seed"], seeds["worlds"]))["noise_seed"] for s in slots)
+    @test all(s["policy"] != "random" || s["policy_seed"] == only(filter(w -> w["world_seed"] == s["world_seed"], seeds["worlds"]))["random_policy_seed"] for s in slots)
+    @test all(s["policy"] != "fixed_design" || s["policy_seed"] === nothing for s in slots)
+    @test isempty(intersect(Set(w["world_seed"] for w in seeds["worlds"]), Set([7122123,7122124,7122125,7122126])))
+    @test ConfirmatoryV01.retry_decision(String[]) == :pending
+    @test ConfirmatoryV01.retry_decision(["completed"]) == :completed
+    @test ConfirmatoryV01.retry_decision(["behavioral_failure"]) == :behavioral_failure
+    @test ConfirmatoryV01.retry_decision(["infrastructure"]) == :retry
+    @test ConfirmatoryV01.retry_decision(["infrastructure", "infrastructure"]) == :terminal_infrastructure
+    @test ConfirmatoryV01.retry_decision(["infrastructure", "completed"]) == :completed
+    @test ConfirmatoryV01.retry_decision(["infrastructure", "behavioral_failure"]) == :behavioral_failure
+end
+
+@testset "DAL-124 restart invariants" begin
+    root = normpath(joinpath(@__DIR__, ".."))
+    matrix = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
+    fixed = first(filter(s -> s["policy"] == "fixed_design", matrix))
+    random = first(filter(s -> s["policy"] == "random", matrix))
+    record(policy, repetition, classification, slot) = (condition_id=slot["condition_id"],
+        world_seed=slot["world_seed"], policy_name=policy, repetition_id=repetition, classification=classification)
+    @test length(ConfirmatoryV01._attempts_for([record("fixed_design", "fixed", "completed", fixed)], fixed)) == 1
+    @test isempty(ConfirmatoryV01._attempts_for([record("random", "random", "completed", random)], fixed))
+    @test ConfirmatoryV01.retry_decision(["behavioral_failure"]) == :behavioral_failure
+    @test ConfirmatoryV01.retry_decision(["infrastructure"]) == :retry
+    @test ConfirmatoryV01.retry_decision(["infrastructure", "infrastructure"]) == :terminal_infrastructure
+    @test ConfirmatoryV01.retry_decision(["infrastructure", "completed"]) == :completed
+    saved = [merge(copy(s), Dict("status"=>"completed", "run_ids"=>["id"], "retry_status"=>"not_used")) for s in matrix]
+    @test ConfirmatoryV01._restore_mutable_slots(matrix, saved)[1]["status"] == "completed"
+    corrupted = deepcopy(saved); corrupted[1]["noise_seed"] += 1
+    @test_throws ErrorException ConfirmatoryV01._restore_mutable_slots(matrix, corrupted)
+    mktempdir() do dir
+        run(`git -C $dir init -q`)
+        run(`git -C $dir -c user.name=test -c user.email=test@example.com commit --allow-empty -qm init`)
+        mkpath(joinpath(dir, "results", "raw")); write(joinpath(dir, "results", "raw", "out"), "ok")
+        mkpath(joinpath(dir, "results", "confirmatory-v0.1")); write(joinpath(dir, "results", "confirmatory-v0.1", "state"), "ok")
+        @test isempty(ConfirmatoryV01._source_dirty(dir))
+        provenance = capture_provenance(string(uuid4()); root=dir)
+        @test provenance.dirty_working_tree === false
+        write(joinpath(dir, "unrelated-source.jl"), "changed")
+        @test !isempty(ConfirmatoryV01._source_dirty(dir))
+        provenance = capture_provenance(string(uuid4()); root=dir)
+        @test provenance.dirty_working_tree === true
+    end
+end
 using JSON3
 using HTTP
 using Random
