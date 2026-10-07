@@ -5,6 +5,7 @@ using UUIDs
 
 include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_1.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "analyze_confirmatory_v0_1.jl"))
 
 @testset "V0.1 attempt-level frozen score materialization" begin
     M = ConfirmatoryScoreMaterializer
@@ -36,6 +37,47 @@ include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_
     @test M.file_tree_hash(rawdir) == raw_hash
     @test M.file_tree_hash(joinpath(root, "results", "confirmatory-v0.1-prereg-4")) == execution_hash
     @test all(r -> !hasproperty(r, :hypothesis) && !hasproperty(r, :paired_difference), rows)
+end
+
+@testset "DAL-125 locked persisted-artifact analysis contracts" begin
+    A=ConfirmatoryV01Analysis
+    root=normpath(joinpath(@__DIR__,".."))
+    resolved=A.resolve_attempts(root)
+    @test length(resolved.attempts)==140
+    @test length(resolved.slots)==120
+    @test count(s->s.terminal_infrastructure,resolved.slots)==11
+    @test all(s->s.repetition_id!="scientist-2"&&s.repetition_id!="scientist-3",resolved.slots)
+    @test count(s->s.condition_id=="gaussian_0.10"&&s.terminal_infrastructure,resolved.slots)==4
+    @test count(s->s.condition_id=="clean"&&s.terminal_infrastructure,resolved.slots)==7
+    @test count(s->s.resolution=="behavioral_failure",resolved.slots)==4
+    @test all(s->s.resolution!="behavioral_failure" ||
+        (s.parameter_error==1.0&&s.prediction_error==1.0),resolved.slots)
+    differences=[-0.5,0.25,0.1,-0.2]
+    b1=A.paired_bootstrap(differences); b2=A.paired_bootstrap(differences)
+    @test b1==b2
+    @test b1.resamples==10_000 && b1.seed==9_123_999 && b1.n_worlds==4
+    @test b1.mean_difference≈sum(differences)/4
+    @test_throws ErrorException A.paired_bootstrap(differences;resamples=9999)
+    @test_throws ErrorException A.paired_bootstrap(differences;seed=3)
+    both=[(hypothesis="H1",ci_high=-0.01),(hypothesis="H1",ci_high=-0.02)]
+    one=[(hypothesis="H1",ci_high=-0.01),(hypothesis="H1",ci_high=0.0)]
+    @test A.hypothesis_supported(both,"H1")
+    @test !A.hypothesis_supported(one,"H1")
+    @test !occursin("score_run(",read(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl"),String))
+    @test !occursin("using Falsify",read(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl"),String))
+    before=ConfirmatoryScoreMaterializer.file_tree_hash(joinpath(root,"results","raw"))
+    first_result=A.analyze(root)
+    primary_path=joinpath(root,"results","derived","v0.1-confirmatory","primary_results.json")
+    first_primary=read(primary_path,String)
+    figure_path=joinpath(root,"results","derived","v0.1-confirmatory","figures","primary-paired-endpoints.svg")
+    first_figure=read(figure_path,String)
+    second_result=A.analyze(root)
+    @test first_result.effects==second_result.effects
+    @test first_primary==read(primary_path,String)
+    @test first_figure==read(figure_path,String)
+    @test ConfirmatoryScoreMaterializer.file_tree_hash(joinpath(root,"results","raw"))==before
+    @test A.hypothesis_supported(first_result.effects,"H1")==first_result.H1
+    @test A.hypothesis_supported(first_result.effects,"H2")==first_result.H2
 end
 
 @testset "DAL-124 frozen confirmatory matrix" begin

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560">
+<rect width="100%" height="100%" fill="white"/><style>text{font-family:Arial,sans-serif;fill:#222}.title{font-size:22px;font-weight:bold}.axis{stroke:#444;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.label{font-size:13px}.small{font-size:11px}</style>
+<text x="450.0" y="30" text-anchor="middle" class="title">Clean vs Gaussian descriptive parameter error</text>
+<line class="axis" x1="145" y1="455" x2="825" y2="455"/><line class="axis" x1="145" y1="75" x2="145" y2="455"/>
+<line class="grid" x1="145" y1="455.0" x2="825" y2="455.0"/><text class="small" x="137" y="459.0" text-anchor="end">0.0</text>
+<line class="grid" x1="145" y1="360.0" x2="825" y2="360.0"/><text class="small" x="137" y="364.0" text-anchor="end">0.288</text>
+<line class="grid" x1="145" y1="265.0" x2="825" y2="265.0"/><text class="small" x="137" y="269.0" text-anchor="end">0.575</text>
+<line class="grid" x1="145" y1="170.0" x2="825" y2="170.0"/><text class="small" x="137" y="174.0" text-anchor="end">0.862</text>
+<line class="grid" x1="145" y1="75.0" x2="825" y2="75.0"/><text class="small" x="137" y="79.0" text-anchor="end">1.15</text>
+<rect x="235.33333333333331" y="454.9999994640485" width="18" height="5.359514958487959e-7" fill="#4575b4" fill-opacity=".5"/><text class="small" x="244.33333333333331" y="449.9999994640485" text-anchor="middle">0.0</text>
+<rect x="263.3333333333333" y="453.4495359006678" width="18" height="1.5504640993322243" fill="#4575b4" fill-opacity=".95"/><text class="small" x="272.3333333333333" y="448.4495359006678" text-anchor="middle">0.005</text>
+<text class="label" x="258.3333333333333" y="479" text-anchor="middle">random</text>
+<rect x="461.99999999999994" y="454.9999994640485" width="18" height="5.35951489928424e-7" fill="#d73027" fill-opacity=".5"/><text class="small" x="470.99999999999994" y="449.9999994640485" text-anchor="middle">0.0</text>
+<rect x="489.99999999999994" y="453.6655993455249" width="18" height="1.33440065447506" fill="#d73027" fill-opacity=".95"/><text class="small" x="498.99999999999994" y="448.6655993455249" text-anchor="middle">0.004</text>
+<text class="label" x="485.0" y="479" text-anchor="middle">fixed_design</text>
+<rect x="688.6666666666666" y="124.56521739130432" width="18" height="330.4347826086957" fill="#1a9850" fill-opacity=".5"/><text class="small" x="697.6666666666666" y="119.56521739130432" text-anchor="middle">1.0</text>
+<rect x="716.6666666666666" y="440.632238002633" width="18" height="14.36776199736699" fill="#1a9850" fill-opacity=".95"/><text class="small" x="725.6666666666666" y="435.632238002633" text-anchor="middle">0.043</text>
+<text class="label" x="711.6666666666666" y="479" text-anchor="middle">scientist</text>
+<text class="small" x="820" y="50" text-anchor="end">pale = clean; solid = gaussian_0.10</text><text class="label" transform="translate(25 265.0) rotate(-90)" text-anchor="middle">Mean parameter error</text>
+</svg>
