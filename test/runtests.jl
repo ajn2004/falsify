@@ -1,6 +1,7 @@
 using Falsify
 using TOML
 using Test
+using UUIDs
 
 include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 
@@ -30,6 +31,18 @@ include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 end
 
 @testset "DAL-124 restart invariants" begin
+    @test isempty(Falsify.RunArtifacts._source_dirty_text(
+        " A results/confirmatory-v0.1/execution-state.json\n" *
+        " A results/raw/abc/public.json"))
+    @test !isempty(Falsify.RunArtifacts._source_dirty_text(
+        " A results/raw/abc/public.json\n" *
+        " M src/Falsify.jl"))
+    @test Falsify.classify_run("completed", nothing) == "completed"
+    @test Falsify.classify_run("failed", "provider_unavailable") == "infrastructure"
+    @test Falsify.classify_run("failed", "rate_limited") == "infrastructure"
+    @test Falsify.classify_run("failed", "invalid_action") == "behavioral_failure"
+    @test Falsify.classify_run("aborted", nothing) == "infrastructure"
+
     root = normpath(joinpath(@__DIR__, ".."))
     matrix = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1.toml"))
     fixed = first(filter(s -> s["policy"] == "fixed_design", matrix))
@@ -52,6 +65,12 @@ end
         mkpath(joinpath(dir, "results", "raw")); write(joinpath(dir, "results", "raw", "out"), "ok")
         mkpath(joinpath(dir, "results", "confirmatory-v0.1")); write(joinpath(dir, "results", "confirmatory-v0.1", "state"), "ok")
         @test isempty(ConfirmatoryV01._source_dirty(dir))
+        mkpath(joinpath(dir, "results", "raw"))
+        write(joinpath(dir, "results", "raw", "example"), "intent to add")
+        run(`git -C $dir add -N results/raw/example`)
+        @test isempty(ConfirmatoryV01._source_dirty(dir))
+        provenance = capture_provenance(string(uuid4()); root=dir)
+        @test provenance.dirty_working_tree === false
         provenance = capture_provenance(string(uuid4()); root=dir)
         @test provenance.dirty_working_tree === false
         write(joinpath(dir, "unrelated-source.jl"), "changed")

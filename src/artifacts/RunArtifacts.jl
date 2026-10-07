@@ -145,7 +145,8 @@ end
 function _git_value(root, args...)
     try
         cmd = Cmd(["git", "-C", String(root), String.(args)...])
-        strip(read(pipeline(cmd; stderr=devnull), String))
+        raw = read(pipeline(cmd; stderr=devnull), String)
+        args == ("status", "--porcelain") ? chomp(raw) : strip(raw)
     catch
         nothing
     end
@@ -160,7 +161,8 @@ function _repository_value(root, git_args...)
         git_args == ("status", "--porcelain") ? ["status"] : String[]
     isempty(args) && return nothing
     try
-        text = strip(read(pipeline(Cmd(["jj", "-R", String(root), args...]); stderr=devnull), String))
+        raw = read(pipeline(Cmd(["jj", "-R", String(root), args...]); stderr=devnull), String)
+        text = git_args == ("status", "--porcelain") ? chomp(raw) : strip(raw)
         git_args == ("status", "--porcelain") && return occursin("working copy has no changes", text) ? "" : text
         isempty(text) ? nothing : text
     catch

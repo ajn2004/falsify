@@ -315,9 +315,9 @@ policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, prov
 
 include("protocol/RunController.jl")
 using .RunController: RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
-    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES
+    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES, classify_run
 export RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
-    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES
+    validate_run_events, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES, classify_run
 
 include("evaluation/SystemIdentification.jl")
 include("evaluation/Metrics.jl")

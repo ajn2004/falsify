@@ -11,7 +11,8 @@ import ..Falsify: OscillatorWorld, ObservationNoise, CleanObservation, GaussianO
     PolicyIdentity, capture_provenance, evaluator_artifact, write_run
 
 export RunConfig, RunOutcome, run_experiment, validate_run_events,
-    run_attempt, RunAttempt, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES
+    run_attempt, RunAttempt, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES,
+    classify_run
 
 """Explicit bounded V0 lifecycle. Retries are new decisions, never hidden calls."""
 struct RunConfig
@@ -211,7 +212,7 @@ const PROVIDER_INFRASTRUCTURE_CODES = ("configuration_failure", "authentication_
     "provider_unavailable", "rate_limited", "provider_rejection",
     "malformed_api_response", "client_failure")
 
-function _classify(status::AbstractString, failure_code)
+function classify_run(status::AbstractString, failure_code)
     status == "aborted" && return "infrastructure"
     status == "completed" && return "completed"
     status == "failed" && return failure_code in PROVIDER_INFRASTRUCTURE_CODES ?
@@ -261,7 +262,7 @@ function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
     status = outcome === nothing ? "aborted" : outcome.public.status
     terminal_code = terminal === nothing || terminal.failure === nothing ?
         nothing : terminal.failure.code
-    classification = outcome === nothing ? "infrastructure" : _classify(status, terminal_code)
+    classification = outcome === nothing ? "infrastructure" : classify_run(status, terminal_code)
     if outcome !== nothing && artifact_dir === nothing && artifacts_root !== nothing
         classification = "infrastructure"
     end

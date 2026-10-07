@@ -72,7 +72,8 @@ end
 function _repo(root, mode)
     git = mode == :commit ? `git -C $root rev-parse HEAD` : `git -C $root status --porcelain --untracked-files=all`
     try
-        return strip(read(pipeline(git; stderr=devnull), String))
+        raw = read(pipeline(git; stderr=devnull), String)
+        return mode == :dirty ? chomp(raw) : strip(raw)
     catch
         jj = mode == :commit ? `jj -R $root log --no-graph -r @ -T commit_id` : `jj -R $root status`
         text = strip(read(pipeline(jj; stderr=devnull), String))
@@ -158,9 +159,7 @@ function _reconcile_journal!(journal_path, ledger_path, raw, slots)
             if records !== nothing && records.public.run_id == id && records.provenance.run_id == id && records.evaluator.run_id == id
                 pub = records.public
                 code = pub.terminal.failure === nothing ? nothing : pub.terminal.failure.code
-                classification = pub.status == "completed" ? "completed" :
-                    pub.status == "aborted" ? "infrastructure" : "behavioral_failure"
-                classification == "aborted" && (classification = "infrastructure")
+                classification = classify_run(pub.status, code)
                 row = (schema_version=1, recorded_at=string(Dates.now(Dates.UTC)), run_id=id,
                     status=pub.status, classification, condition_id=start.condition_id,
                     repetition_id=start.repetition_id, policy_name=pub.policy_identity.name,
