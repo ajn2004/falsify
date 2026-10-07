@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560">
+<rect width="100%" height="100%" fill="white"/><style>text{font-family:Arial,sans-serif;fill:#222}.title{font-size:22px;font-weight:bold}.axis{stroke:#444;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.label{font-size:13px}.small{font-size:11px}</style>
+<text x="450.0" y="30" text-anchor="middle" class="title">Paired endpoint differences with 95% world-bootstrap intervals</text>
+<line class="axis" x1="339.10707077408574" y1="85" x2="339.10707077408574" y2="485"/>
+<text class="label" x="285" y="139.0" text-anchor="end">H1 parameter_error</text>
+<line stroke="#34495e" stroke-width="3" x1="335.17241379310343" y1="135.0" x2="770.4287972937645" y2="135.0"/><circle cx="482.9115726472557" cy="135.0" r="6" fill="#e67e22"/><text class="small" x="820" y="139.0">N=26</text>
+<text class="label" x="285" y="239.0" text-anchor="end">H1 prediction_error</text>
+<line stroke="#34495e" stroke-width="3" x1="338.2525391049692" y1="235.0" x2="767.8028443933557" y2="235.0"/><circle cx="481.8112638052976" cy="235.0" r="6" fill="#e67e22"/><text class="small" x="820" y="239.0">N=26</text>
+<text class="label" x="285" y="339.0" text-anchor="end">H2 parameter_error</text>
+<line stroke="#34495e" stroke-width="3" x1="336.90933469884976" y1="335.0" x2="774.8275862068965" y2="335.0"/><circle cx="485.8297671359884" cy="335.0" r="6" fill="#e67e22"/><text class="small" x="820" y="339.0">N=26</text>
+<text class="label" x="285" y="439.0" text-anchor="end">H2 prediction_error</text>
+<line stroke="#34495e" stroke-width="3" x1="338.65179403814193" y1="435.0" x2="767.9148128721862" y2="435.0"/><circle cx="482.03220354033147" cy="435.0" r="6" fill="#e67e22"/><text class="small" x="820" y="439.0">N=26</text>
+<text class="label" x="555.0" y="520" text-anchor="middle">Scientist − baseline (negative favors Scientist)</text>
+</svg>

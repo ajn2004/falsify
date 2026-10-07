@@ -1,0 +1,7 @@
+condition_id,policy,n_scored,success_threshold,successes,success_rate
+gaussian_0.10,random,30,0.1,30,1.0
+gaussian_0.10,fixed_design,30,0.1,30,1.0
+gaussian_0.10,scientist,26,0.1,25,0.9615384615384616
+clean,random,10,0.1,10,1.0
+clean,fixed_design,10,0.1,10,1.0
+clean,scientist,3,0.1,0,0.0

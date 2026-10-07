@@ -1,0 +1,7 @@
+condition_id,policy,logical_slots,completed_runs,behavioral_failures,infrastructure_first_attempts,recovered_infrastructure_retries,terminal_infrastructure_slots,invalid_action_count,decision_opportunities,valid_interventions,all_attempt_decision_opportunities,all_attempt_invalid_actions
+gaussian_0.10,random,30,30,0,0,0,0,0,240,240,240,0
+gaussian_0.10,fixed_design,30,30,0,0,0,0,0,240,240,240,0
+gaussian_0.10,scientist,30,25,1,12,8,4,0,203,202,270,0
+clean,random,10,10,0,0,0,0,0,80,80,80,0
+clean,fixed_design,10,10,0,0,0,0,0,80,80,80,0
+clean,scientist,10,0,3,8,1,7,0,9,6,74,1

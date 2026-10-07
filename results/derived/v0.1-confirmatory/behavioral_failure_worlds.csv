@@ -1,0 +1,5 @@
+condition_id,world_seed,policy,run_id,parameter_error,prediction_error,retained_primary
+gaussian_0.10,8123002,scientist,8694b0b1-0dfa-45e8-9b10-141dc330ebe3,1,1,true
+clean,8123001,scientist,4c508e03-c2ed-4759-be8a-1320c301b7b2,1,1,false
+clean,8123002,scientist,b899b1ff-d098-47ae-abe6-210d2bb2a71b,1,1,false
+clean,8123008,scientist,87ffa9ee-5c3d-4797-b825-82b3ecfd1ea5,1,1,false
