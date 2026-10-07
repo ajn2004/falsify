@@ -1,0 +1,1 @@
+{"event":"attempt_started","slot_id":"8123001/gaussian_0.10/random","run_id":"af3af1c1-bcfc-4817-b5c4-e0e302548365","repetition_id":"random","policy":"random","world_seed":8123001,"noise_seed":9123001,"policy_seed":10123001,"intervention_budget":8,"max_decision_opportunities":16,"protocol_id":"falsify-v0.1-prereg-4","condition_id":"gaussian_0.10"}
