@@ -2,10 +2,13 @@ module RunController
 
 using Dates
 using ..Falsify: JSON3
-import ..Falsify: OscillatorWorld, ObservationNoise, CleanObservation, GaussianObservationNoise, NOISE_IMPLEMENTATION_VERSION,
+import ..Falsify: AbstractEnvironment, ObservationNoise, CleanObservation, GaussianObservationNoise, NOISE_IMPLEMENTATION_VERSION,
     apply_measurement_process, public_task, policy_task, limits_for, PublicState,
-    DecisionHistoryEntry, ExperimentAction, PolicyDecision, next_decision, validate_action,
-    to_environment_action, observe, policy_observation, policy_identity, policy_configuration, metadata,
+    DecisionHistoryEntry, PolicyDecision, ValidationResult, decision_with_parser,
+    execute_experiment, apply_environment_noise, action_schema, public_action, public_observation,
+    validate_environment_action, policy_identity, policy_configuration, policy_contract_profile, metadata,
+    environment_id, environment_version, action_schema_version, observation_schema_version,
+    parse_action, validate_schedule,
     PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
     PublicFailure, EvaluatorFailure, PolicyFailure, TerminalResult, ProtocolSettings, artifact_limits, new_run_id, policy_seed,
     PolicyIdentity, capture_provenance, evaluator_artifact, write_run
@@ -84,7 +87,7 @@ struct RunAttempt
     record::NamedTuple
 end
 
-function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
+function run_experiment(world::AbstractEnvironment, policy, config::RunConfig;
         root=pwd(), run_id=new_run_id(), repetition_id=nothing, condition_id=nothing, protocol_id=nothing)
     task = public_task(world); limits = limits_for(task)
     events = RunEvent[]; history = DecisionHistoryEntry[]
@@ -94,11 +97,12 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
     abort_exception = nothing; abort_stage = nothing
     while remaining > 0 && opportunities < config.max_decision_opportunities
         state = PublicState(policy_task(task), limits, Tuple(history), remaining,
-            config.max_decision_opportunities - opportunities)
+            config.max_decision_opportunities - opportunities; action_schema=action_schema(world),
+            policy_contract_profile=policy_contract_profile(world))
         opportunities += 1
         started = time()
         decision = try
-            next_decision(policy, state)
+            decision_with_parser(policy, state, content -> parse_action(typeof(world), content))
         catch failure
             if failure isa PolicyFailure
                 code = String(failure.code)
@@ -115,17 +119,22 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
             break
         end
         action = decision.action
+        visible_action = nothing
         validation = nothing; observation = nothing
         apparatus_failure = try
-            validation = validate_action(action, state)
+            visible_action = public_action(world, action)
+            validation = remaining <= 0 ? ValidationResult(false, :budget_exhausted) :
+                validate_environment_action(world, action)
+            validation.valid && (validation = validate_schedule(limits))
             if validation.valid
-                clean = observe(world, to_environment_action(action))
-                observation = apply_measurement_process(clean, config.observation_noise,
+                clean = execute_experiment(world, action)
+                observation = apply_environment_noise(world, clean, config.observation_noise,
                     config.noise_seed, config.intervention_budget - remaining + 1)
+                observation = public_observation(world, observation)
             end
             false
         catch failure
-            terminal_failure = _abort_run!(events, opportunities, action, validation,
+            terminal_failure = _abort_run!(events, opportunities, visible_action, validation,
                 remaining, time()-started, decision.operational_metadata)
             status = "aborted"; abort_exception = failure; abort_stage = "apparatus"
             true
@@ -133,14 +142,14 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
         apparatus_failure && break
         if validation.valid
             remaining -= 1
-            push!(events, RunEvent(opportunities, action, true, "accepted", true, observation,
+            push!(events, RunEvent(opportunities, visible_action, true, "accepted", true, observation,
                 remaining, "running", time()-started, nothing, decision.operational_metadata))
-            push!(history, DecisionHistoryEntry(action, true, :accepted, true, observation, nothing, remaining))
+            push!(history, DecisionHistoryEntry(visible_action, true, :accepted, true, observation, nothing, remaining))
         else
             code = validation.code
-            push!(events, RunEvent(opportunities, action, false, String(code), false, nothing,
+            push!(events, RunEvent(opportunities, visible_action, false, String(code), false, nothing,
                 remaining, "running", time()-started, PublicFailure(String(code); stage_index=opportunities), decision.operational_metadata))
-            push!(history, DecisionHistoryEntry(action, false, code, false, nothing, code, remaining))
+            push!(history, DecisionHistoryEntry(visible_action, false, code, false, nothing, code, remaining))
         end
     end
     if status == "completed" && remaining > 0
@@ -158,14 +167,18 @@ function run_experiment(world::OscillatorWorld, policy, config::RunConfig;
             last_event.operational_metadata)
     end
     validate_run_events(events, config.intervention_budget, terminal)
-    ident = policy_identity(policy)
+    ident = policy_identity(policy, world)
     public = PublicRunArtifact(; run_id, status, finalized_at=string(now(UTC)),
+        environment_id=environment_id(world), environment_version=environment_version(world),
+        action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
         task_description=task.model_description, action_limits=artifact_limits(limits),
         intervention_budget=config.intervention_budget, protocol_settings=ProtocolSettings(true),
         policy_identity=ident, events=Tuple(events), terminal)
     provenance = capture_provenance(run_id; root, world, noise_seed=config.noise_seed,
         policy_seed=policy_seed(policy), repetition_id,
-        configuration=(protocol_id, policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
+        configuration=(protocol_id, environment_id=environment_id(world), environment_version=environment_version(world),
+            action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
+            policy=policy_configuration(policy), max_decision_opportunities=config.max_decision_opportunities,
             retry_allowance=config.max_decision_opportunities-config.intervention_budget,
             noise_condition=config.observation_noise isa CleanObservation ? "clean" : "gaussian",
             sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
@@ -183,20 +196,24 @@ end
 """Sanitized exception identity for evaluator-side diagnostics; never the message."""
 _exception_name(failure) = failure === nothing ? nothing : string(nameof(typeof(failure)))
 
-function _aborted_outcome(world::OscillatorWorld, policy, config::RunConfig, run_id;
+function _aborted_outcome(world::AbstractEnvironment, policy, config::RunConfig, run_id;
         root, repetition_id, condition_id, protocol_id, failure)
     task = public_task(world); limits = limits_for(task)
-    ident = try policy_identity(policy) catch; PolicyIdentity("unidentified") end
+    ident = try policy_identity(policy, world) catch; PolicyIdentity("unidentified") end
     terminal = TerminalResult("aborted", nothing,
         PublicFailure(APPARATUS_FAILURE_CODE), 0, 0, 0)
     public = PublicRunArtifact(; run_id, status="aborted", finalized_at=string(now(UTC)),
+        environment_id=environment_id(world), environment_version=environment_version(world),
+        action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
         task_description=task.model_description, action_limits=artifact_limits(limits),
         intervention_budget=config.intervention_budget,
         protocol_settings=ProtocolSettings(true), policy_identity=ident,
         events=(), terminal)
     provenance = capture_provenance(run_id; root, world, noise_seed=config.noise_seed,
         policy_seed=try policy_seed(policy) catch; nothing end, repetition_id,
-        configuration=(protocol_id, aborted_before_finalization=true,
+        configuration=(protocol_id, environment_id=environment_id(world), environment_version=environment_version(world),
+            action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
+            aborted_before_finalization=true,
             condition_id=condition_id,
             noise_condition=config.observation_noise isa CleanObservation ? "clean" : "gaussian",
             sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
@@ -238,7 +255,7 @@ record, and
 every attempt appends a run-ledger line even when artifact persistence fails.
 Returns a `RunAttempt`; the ledger is evaluator-side bookkeeping.
 """
-function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
+function run_attempt(world::AbstractEnvironment, policy, config::RunConfig;
         root=pwd(), artifacts_root=nothing, ledger_path=nothing,
         repetition_id=nothing, condition_id=nothing, protocol_id=nothing, run_id=new_run_id())
     run_id = String(run_id)
@@ -274,6 +291,8 @@ function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
     end
     record = (schema_version=1, recorded_at=string(now(UTC)), run_id,
         status, classification,
+        environment_id=environment_id(world), environment_version=environment_version(world),
+        action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
         condition_id=condition_id === nothing ? nothing : String(condition_id),
         repetition_id=repetition_id === nothing ? nothing : String(repetition_id),
         policy_name=outcome === nothing ? nothing : outcome.public.policy_identity.name,

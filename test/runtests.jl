@@ -3,11 +3,154 @@ using JSON3
 using TOML
 using Test
 using UUIDs
+using Random
+
+struct ContractProbeEnvironment <: Falsify.AbstractEnvironment
+    truth::Float64
+    world_seed::Int
+end
+struct ContractProbeAction <: Falsify.AbstractExperimentAction
+    control_value::Float64
+end
+struct ContractProbeObservation <: Falsify.AbstractPolicyObservation
+    time_s::Tuple{Float64,Float64}
+    measurement_a::Tuple{Float64,Float64}
+    measurement_b::Tuple{Float64,Float64}
+    noise_model::String
+    noise_scale::Float64
+end
+import Falsify: environment_id, public_task, limits_for, metadata, evaluator_truth, action_schema,
+    parse_action, validate_environment_action, execute_experiment, apply_environment_noise,
+    public_action, public_observation
+environment_id(::ContractProbeEnvironment) = "test_contract_probe"
+public_task(::ContractProbeEnvironment) = Falsify.TaskDescription("Deterministic two-channel contract probe; control bounded in [0, 1].")
+limits_for(::Falsify.TaskDescription) = (control_value=(0.0, 1.0), duration_s=1.0, cadence_s=1.0, max_samples=2)
+metadata(w::ContractProbeEnvironment) = (world_seed=w.world_seed,)
+evaluator_truth(w::ContractProbeEnvironment) = (gain=w.truth,)
+action_schema(::ContractProbeEnvironment) = Dict("type"=>"object", "properties"=>Dict(
+    "control_value"=>Dict("type"=>"number", "minimum"=>0, "maximum"=>1)),
+    "required"=>["control_value"], "additionalProperties"=>false)
+function parse_action(::Type{ContractProbeEnvironment}, content::AbstractString)
+    parsed = JSON3.read(content)
+    parsed isa JSON3.Object && Set(String(k) for k in keys(parsed)) == Set(["control_value"]) ||
+        throw(Falsify.PolicyFailure(:malformed_response))
+    x = parsed[:control_value]
+    x isa Real && !(x isa Bool) || throw(Falsify.PolicyFailure(:invalid_field_type))
+    ContractProbeAction(Float64(x))
+end
+validate_environment_action(::ContractProbeEnvironment, a::ContractProbeAction) =
+    isfinite(a.control_value) && 0 <= a.control_value <= 1 ? Falsify.ValidationResult(true, :accepted) : Falsify.ValidationResult(false, :out_of_bounds)
+execute_experiment(w::ContractProbeEnvironment, a::ContractProbeAction) =
+    ContractProbeObservation((0.0, 1.0), (a.control_value, a.control_value), (w.truth*a.control_value, w.truth*a.control_value), "clean", 0.0)
+apply_environment_noise(::ContractProbeEnvironment, obs::ContractProbeObservation, ::Falsify.CleanObservation, seed, index) = obs
+function apply_environment_noise(::ContractProbeEnvironment, obs::ContractProbeObservation,
+        noise::Falsify.GaussianObservationNoise, seed, index)
+    rng = MersenneTwister(Falsify._noise_stream_seed(seed, index)); σ = noise.sigma_m
+    ContractProbeObservation(obs.time_s,
+        Tuple(x + σ*randn(rng) for x in obs.measurement_a),
+        Tuple(x + σ*randn(rng) for x in obs.measurement_b), "gaussian_additive", σ)
+end
+public_action(::ContractProbeEnvironment, a::ContractProbeAction) = a
+public_observation(::ContractProbeEnvironment, o::ContractProbeObservation) = o
 
 include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_1.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "analyze_confirmatory_v0_1.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "reliability_report_v0_2.jl"))
+
+struct ContractProbeClient <: AbstractModelClient
+    content::String
+    seen::Base.RefValue{Union{Nothing,ModelRequest}}
+end
+Falsify.request(c::ContractProbeClient, req::ModelRequest) = (c.seen[] = req; ModelResponse(c.content))
+
+@testset "DAL-150 generic environment contract" begin
+    probe = ContractProbeEnvironment(0.314159, 918273)
+    seen = Ref{Union{Nothing,ModelRequest}}(nothing)
+    out = run_experiment(probe, ScientistPolicy(ContractProbeClient("{\"control_value\":0.6}", seen)), RunConfig(1))
+    @test out.public.status == "completed"
+    @test out.public.environment_id == "test_contract_probe"
+    @test out.public.action_schema_version == "1"
+    @test out.public.policy_identity.version == GENERIC_PROMPT_VERSION
+    @test out.public.observation_schema_version == "1"
+    @test out.public.events[1].requested_action isa ContractProbeAction
+    observation = out.public.events[1].observation
+    @test observation isa ContractProbeObservation
+    @test observation.measurement_a == (0.6, 0.6)
+    @test observation.measurement_b == (0.1884954, 0.1884954)
+    noisy_cfg = RunConfig(1; observation_noise=GaussianObservationNoise(0.05), noise_seed=817263)
+    noisy1 = run_experiment(probe, ScientistPolicy(ContractProbeClient("{\"control_value\":0.6}", Ref{Union{Nothing,ModelRequest}}(nothing))), noisy_cfg)
+    noisy2 = run_experiment(probe, ScientistPolicy(ContractProbeClient("{\"control_value\":0.6}", Ref{Union{Nothing,ModelRequest}}(nothing))), noisy_cfg)
+    @test noisy1.public.events[1].observation == noisy2.public.events[1].observation
+    @test noisy1.public.events[1].observation.noise_model == "gaussian_additive"
+    invalid = run_experiment(probe, ScientistPolicy(ContractProbeClient("{\"control_value\":1.2}", Ref{Union{Nothing,ModelRequest}}(nothing))), RunConfig(1))
+    @test invalid.public.events[1].validation_code == "out_of_bounds"
+    @test classify_run(invalid.public.status, invalid.public.terminal.failure.code) == "behavioral_failure"
+    @test seen[] !== nothing
+    @test seen[].action_schema == action_schema(probe)
+    public_payload = JSON3.write(seen[])
+    for forbidden in ("0.314159", "918273", "world_seed", "noise_seed", "evaluator", "score", "truth",
+            "hidden_class", "natural_frequency", "artifact_dir", "evaluator.json", "results/private")
+        @test !occursin(forbidden, public_payload)
+    end
+    @test_throws PolicyFailure parse_action(ContractProbeEnvironment, "{\"different\":0.5}")
+
+    cfg = OpenRouterConfig(model="mock/model", provider_order=["mock"], prompt_version=seen[].prompt_version)
+    payload = Falsify.OpenRouterIntegration.openrouter_payload(cfg, seen[])
+    schema = payload["response_format"]["json_schema"]["schema"]
+    @test haskey(schema["properties"], "control_value")
+    @test !haskey(schema["properties"], "initial_displacement_m")
+
+    oscillator_state = PublicState(policy_task(public_task(generate_world(19))),
+        limits_for(public_task(generate_world(19))), (), 1; action_schema=Falsify.legacy_action_schema(),
+        policy_contract_profile=PROMPT_VERSION)
+    oscillator_request = model_request(oscillator_state)
+    oscillator_cfg = OpenRouterConfig(model="mock/model", provider_order=["mock"], prompt_version=oscillator_request.prompt_version)
+    oscillator_payload = Falsify.OpenRouterIntegration.openrouter_payload(oscillator_cfg, oscillator_request)
+    oscillator_schema = oscillator_payload["response_format"]["json_schema"]["schema"]
+    @test haskey(oscillator_schema["properties"], "initial_displacement_m")
+    @test all(value == Dict("type"=>"number") for value in values(oscillator_schema["properties"]))
+    oscillator_user = JSON3.read(oscillator_payload["messages"][2].content)
+    @test Set(Symbol.(keys(oscillator_user))) == Set((:task_description, :action_limits,
+        :remaining_intervention_budget, :remaining_decision_opportunities, :public_decision_history))
+    oscillator_run = run_experiment(generate_world(19),
+        ScientistPolicy(ContractProbeClient("{}", Ref{Union{Nothing,ModelRequest}}(nothing))), RunConfig(1))
+    @test oscillator_run.public.policy_identity.version == PROMPT_VERSION
+
+    # A future environment may intentionally share V0.1's controls without inheriting its contract.
+    same_schema_state = PublicState(policy_task(public_task(probe)), limits_for(public_task(probe)), (), 1;
+        action_schema=Falsify.legacy_action_schema(), policy_contract_profile=GENERIC_PROMPT_VERSION)
+    same_schema_request = model_request(same_schema_state)
+    @test same_schema_request.prompt_version == GENERIC_PROMPT_VERSION
+    @test policy_identity(ScientistPolicy(ContractProbeClient("{}", Ref{Union{Nothing,ModelRequest}}(nothing))), probe).version == GENERIC_PROMPT_VERSION
+    generic_cfg = OpenRouterConfig(model="mock/model", provider_order=["mock"], prompt_version=GENERIC_PROMPT_VERSION)
+    generic_payload = Falsify.OpenRouterIntegration.openrouter_payload(generic_cfg, same_schema_request)
+    generic_user = JSON3.read(generic_payload["messages"][2].content)
+    @test haskey(generic_user, :action_schema)
+
+    mktempdir() do root
+        path = write_run(root, out.public, out.provenance, out.evaluator)
+        loaded = load_run(path)
+        @test loaded.public.environment_id == "test_contract_probe"
+        @test loaded.public.action_schema_version == "1"
+        public_json = read(joinpath(path, "public.json"), String)
+        @test !occursin("0.314159", public_json)
+        @test !occursin("918273", public_json)
+        @test occursin("0.314159", read(joinpath(path, "evaluator.json"), String))
+        @test occursin("control_value", public_json)
+        @test occursin("measurement_b", public_json)
+        attempt = run_attempt(probe,
+            ScientistPolicy(ContractProbeClient("{\"control_value\":0.4}", Ref{Union{Nothing,ModelRequest}}(nothing))),
+            RunConfig(1); artifacts_root=joinpath(root, "attempts"), ledger_path=joinpath(root, "ledger.jsonl"))
+        @test attempt.classification == "completed"
+        @test attempt.outcome.public.environment_id == "test_contract_probe"
+        @test isfile(joinpath(attempt.artifact_dir, "public.json"))
+    end
+
+    @test classify_run("failed", "provider_unavailable") == "infrastructure"
+    @test classify_run("failed", "invalid_action") == "behavioral_failure"
+    @test classify_run("aborted", "apparatus_exception") == "apparatus_failure"
+end
 
 @testset "DAL-155 reliability report reconciliation" begin
     R = ReliabilityReportV02
@@ -332,7 +475,7 @@ Falsify.request(::MalformedWithMetadata, ::ModelRequest) = ModelResponse("not-js
     @test !occursin("advisor", serialized)
     @test !occursin(string(metadata(world).world_seed), serialized)
     @test fieldnames(ModelRequest) == (:prompt_version, :system_instruction, :task_description,
-        :limits, :remaining_intervention_budget, :remaining_decision_opportunities, :history)
+        :limits, :action_schema, :remaining_intervention_budget, :remaining_decision_opportunities, :history)
     @test !hasfield(ModelRequest, :world)
     @test !hasfield(ModelRequest, :provenance)
     @test model_request(state) == model_request(state)
@@ -527,7 +670,7 @@ end
     @test fieldtype(Observation, :measurements) <: Tuple
     @test hasfield(Observation, :noise_scale_m)
     @test !hasfield(Observation, :noise_scale)
-    @test fieldtype(PublicState, :task) === TaskDescription
+    @test fieldtype(typeof(state), :task) === TaskDescription
     @test !hasfield(TaskDescription, :final_time)
     @test ExperimentAction !== OscillatorExperiment
     @test to_environment_action(valid) isa OscillatorExperiment
