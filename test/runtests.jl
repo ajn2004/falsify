@@ -1,4 +1,5 @@
 using Falsify
+using JSON3
 using TOML
 using Test
 using UUIDs
@@ -6,6 +7,57 @@ using UUIDs
 include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_1.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "analyze_confirmatory_v0_1.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "reliability_report_v0_2.jl"))
+
+@testset "DAL-155 reliability report reconciliation" begin
+    R = ReliabilityReportV02
+    root = normpath(joinpath(@__DIR__, ".."))
+    frozen = R.summarize(joinpath(root, "results", "confirmatory-v0.1-prereg-4"))
+    @test frozen.total_logical_slots == 40
+    @test frozen.total_raw_attempts == 60
+    @test frozen.completed_slots == 25
+    @test frozen.behavioral_terminal_slots == 4
+    @test frozen.infrastructure_terminal_slots == 11
+    @test frozen.recovered_infrastructure_slots == 9
+    retry_slots = unique(a.slot_id for a in frozen.attempts if count(x -> x.slot_id == a.slot_id, frozen.attempts) == 2)
+    @test length(retry_slots) == 20
+    @test all(slot -> sort([x.attempt_number for x in frozen.attempts if x.slot_id == slot]) == [1, 2], retry_slots)
+
+    mktempdir() do temp
+        execution = joinpath(temp, "results", "execution")
+        mkpath(execution)
+        write(joinpath(execution, "execution-plan.json"), JSON3.write((protocol_id="fixture-v1", slots=[
+            (slot_id="s1", policy="scientist", condition_id="clean", world_seed=1),
+            (slot_id="s2", policy="scientist", condition_id="clean", world_seed=2)])))
+        write(joinpath(execution, "execution-state.json"), JSON3.write((;
+            slots=[
+            (slot_id="s1", run_ids=["a1", "a2"]), (slot_id="s2", run_ids=["a3"]),
+            (slot_id="other", run_ids=["b1"])]
+        )))
+        ledger = [
+            (run_id="a1", classification="infrastructure", terminal_failure_code="provider_unavailable", decision_opportunities_used=0),
+            (run_id="a2", classification="completed", terminal_failure_code=nothing, decision_opportunities_used=1),
+            (run_id="a3", classification="apparatus_failure", terminal_failure_code="apparatus_exception", decision_opportunities_used=1),
+            (run_id="b1", classification="completed", terminal_failure_code=nothing, decision_opportunities_used=1)]
+        open(joinpath(execution, "run-ledger.jsonl"), "w") do io
+            foreach(x -> (write(io, JSON3.write(x)); write(io, '\n')), ledger)
+        end
+        journal = [(event="attempt_started", run_id="a1", slot_id="s1", policy="scientist", repetition_id="first", condition_id="clean"),
+            (event="attempt_started", run_id="a2", slot_id="s1", policy="scientist", repetition_id="second", condition_id="clean"),
+            (event="attempt_started", run_id="a3", slot_id="s2", policy="scientist", repetition_id="only", condition_id="clean"),
+            (event="attempt_started", run_id="b1", slot_id="other", policy="random", repetition_id="only", condition_id="clean")]
+        open(joinpath(execution, "attempt-journal.jsonl"), "w") do io
+            foreach(x -> (write(io, JSON3.write(x)); write(io, '\n')), journal)
+        end
+        report = R.summarize(execution)
+        @test report.total_raw_attempts == 3
+        @test report.all_policy_raw_attempts == 4
+        @test [a.attempt_number for a in report.attempts if a.slot_id == "s1"] == [1, 2]
+        @test report.recovered_infrastructure_slots == 1
+        @test report.apparatus_failure_slots == ["s2"]
+        @test !report.gate_pass
+    end
+end
 
 @testset "V0.1 attempt-level frozen score materialization" begin
     M = ConfirmatoryScoreMaterializer
@@ -134,8 +186,19 @@ end
     @test Falsify.classify_run("completed", nothing) == "completed"
     @test Falsify.classify_run("failed", "provider_unavailable") == "infrastructure"
     @test Falsify.classify_run("failed", "rate_limited") == "infrastructure"
+    @test Falsify.classify_run("failed", "authentication_failure") == "infrastructure"
+    @test Falsify.classify_run("failed", "malformed_api_response") == "infrastructure"
     @test Falsify.classify_run("failed", "invalid_action") == "behavioral_failure"
-    @test Falsify.classify_run("aborted", nothing) == "infrastructure"
+    @test Falsify.classify_run("failed", "malformed_response") == "behavioral_failure"
+    @test Falsify.classify_run("failed", "missing_required_field") == "behavioral_failure"
+    @test Falsify.classify_run("failed", "nonfinite_field") == "behavioral_failure"
+    @test Falsify.classify_run("aborted", nothing) == "apparatus_failure"
+    @test all(code -> Falsify.classify_run("failed", code) == "infrastructure",
+        Falsify.PROVIDER_INFRASTRUCTURE_CODES)
+    @test !(:apparatus_exception in Symbol.(Falsify.PROVIDER_INFRASTRUCTURE_CODES))
+    @test ConfirmatoryV01.retry_decision(["infrastructure"]) == :retry
+    @test ConfirmatoryV01.retry_decision(["behavioral_failure"]) == :behavioral_failure
+    @test_throws ErrorException ConfirmatoryV01.retry_decision(["apparatus_failure"])
 
     root = normpath(joinpath(@__DIR__, ".."))
     matrix = ConfirmatoryV01.build_matrix(joinpath(root, "research", "confirmatory-seeds-v0.1-prereg-4.toml"))
@@ -890,7 +953,7 @@ Falsify.policy_configuration(::ThrowingIdentityPolicy) = (;)
         attempt = run_attempt(world, ThrowingIdentityPolicy(), RunConfig(2);
             root=normpath(joinpath(@__DIR__, "..")), artifacts_root=store,
             ledger_path=ledger)
-        @test attempt.classification == "infrastructure"
+    @test attempt.classification == "apparatus_failure"
         @test attempt.outcome !== nothing
         @test attempt.outcome.public.status == "aborted"
         @test attempt.outcome.public.policy_identity.name == "unidentified"
@@ -902,12 +965,12 @@ Falsify.policy_configuration(::ThrowingIdentityPolicy) = (;)
         @test loaded.evaluator.failures[1].diagnostic == "ErrorException"
         @test loaded.evaluator.evaluator_metadata.unfinalized_events == true
         record = JSON3.read(strip(read(ledger, String)))
-        @test record.classification == "infrastructure"
+        @test record.classification == "apparatus_failure"
         @test record.terminal_failure_code == APPARATUS_FAILURE_CODE
+        @test_throws ErrorException ConfirmatoryV01.retry_decision([record.classification])
     end
 
-    # Persistence failure keeps the attempt classified as infrastructure and the
-    # ledger still records it without an artifact directory.
+    # Persistence failure is an apparatus defect, never retry-eligible provider infrastructure.
     mktempdir() do dir
         blocker = joinpath(dir, "not-a-directory")
         write(blocker, "occupied")
@@ -917,9 +980,11 @@ Falsify.policy_configuration(::ThrowingIdentityPolicy) = (;)
             ledger_path=ledger)
         @test attempt.outcome !== nothing
         @test attempt.artifact_dir === nothing
-        @test attempt.classification == "infrastructure"
+        @test attempt.classification == "apparatus_failure"
         record = JSON3.read(strip(read(ledger, String)))
-        @test record.classification == "infrastructure"
+        @test record.classification == "apparatus_failure"
+        @test record.terminal_failure_code == "artifact_persistence_failure"
+        @test_throws ErrorException ConfirmatoryV01.retry_decision([record.classification])
         @test record.status == "completed"
         @test record.artifact_dir === nothing
     end

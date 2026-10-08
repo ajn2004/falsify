@@ -12,7 +12,7 @@ import ..Falsify: OscillatorWorld, ObservationNoise, CleanObservation, GaussianO
 
 export RunConfig, RunOutcome, run_experiment, validate_run_events,
     run_attempt, RunAttempt, APPARATUS_FAILURE_CODE, PROVIDER_INFRASTRUCTURE_CODES,
-    classify_run
+    APPARATUS_FAILURE_CLASS, classify_run
 
 """Explicit bounded V0 lifecycle. Retries are new decisions, never hidden calls."""
 struct RunConfig
@@ -64,6 +64,7 @@ end
 
 """Stable public code for unexpected (non-PolicyFailure) apparatus exceptions."""
 const APPARATUS_FAILURE_CODE = "apparatus_exception"
+const APPARATUS_FAILURE_CLASS = "apparatus_failure"
 
 function _abort_run!(events, sequence, action, validation, remaining, elapsed, metadata)
     terminal_failure = PublicFailure(APPARATUS_FAILURE_CODE; stage_index=sequence)
@@ -213,7 +214,9 @@ const PROVIDER_INFRASTRUCTURE_CODES = ("configuration_failure", "authentication_
     "malformed_api_response", "client_failure")
 
 function classify_run(status::AbstractString, failure_code)
-    status == "aborted" && return "infrastructure"
+    # Unexpected controller/simulator exceptions are defects in the apparatus,
+    # not provider delivery failures and therefore never retry eligible.
+    status == "aborted" && return APPARATUS_FAILURE_CLASS
     status == "completed" && return "completed"
     status == "failed" && return failure_code in PROVIDER_INFRASTRUCTURE_CODES ?
         "infrastructure" : "behavioral_failure"
@@ -229,8 +232,9 @@ function _append_ledger(path::AbstractString, record::NamedTuple)
 end
 
 """
-Run one attempt under supervision: typed PolicyFailure remains behavioral, any
-unexpected exception becomes a durable `aborted` (infrastructure) record, and
+Run one attempt under supervision: typed PolicyFailure is classified by its
+failure code, any unexpected exception becomes a durable `aborted` (apparatus)
+record, and
 every attempt appends a run-ledger line even when artifact persistence fails.
 Returns a `RunAttempt`; the ledger is evaluator-side bookkeeping.
 """
@@ -262,9 +266,11 @@ function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
     status = outcome === nothing ? "aborted" : outcome.public.status
     terminal_code = terminal === nothing || terminal.failure === nothing ?
         nothing : terminal.failure.code
-    classification = outcome === nothing ? "infrastructure" : classify_run(status, terminal_code)
+    failure_code = outcome === nothing ? "apparatus_exception" : terminal_code
+    classification = outcome === nothing ? APPARATUS_FAILURE_CLASS : classify_run(status, terminal_code)
     if outcome !== nothing && artifact_dir === nothing && artifacts_root !== nothing
-        classification = "infrastructure"
+        classification = APPARATUS_FAILURE_CLASS
+        failure_code = "artifact_persistence_failure"
     end
     record = (schema_version=1, recorded_at=string(now(UTC)), run_id,
         status, classification,
@@ -278,7 +284,7 @@ function run_attempt(world::OscillatorWorld, policy, config::RunConfig;
         interventions_used=terminal === nothing ? 0 : terminal.interventions_used,
         decision_opportunities_used=terminal === nothing ? 0 : terminal.decision_opportunities_used,
         invalid_action_count=terminal === nothing ? 0 : terminal.invalid_action_count,
-        terminal_failure_code=terminal_code,
+        terminal_failure_code=failure_code,
         abort_diagnostic=outcome === nothing ? _exception_name(failure) : nothing,
         artifact_dir=artifact_dir === nothing ? nothing : String(artifact_dir))
     if ledger_path !== nothing
