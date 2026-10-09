@@ -4,8 +4,9 @@ using Dates
 using JSON3
 using SHA
 using UUIDs
-import ..Falsify: ActionLimits, ExperimentAction, Observation, OscillatorWorld, OperationalMetadata,
-    RUNTIME_OUTPUT_PREFIXES, evaluator_truth, metadata
+import ..Falsify: ActionLimits, OperationalMetadata,
+    AbstractEnvironment, AbstractExperimentAction, AbstractPolicyObservation, RUNTIME_OUTPUT_PREFIXES,
+    evaluator_truth, metadata, environment_provenance
 
 export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
        PublicFailure, EvaluatorFailure, TerminalResult, ArtifactActionLimits, ProtocolSettings,
@@ -38,11 +39,11 @@ end
 """A deliberately small tagged decision record, extensible for later provider events."""
 struct RunEvent
     sequence::Int
-    requested_action::Union{Nothing,ExperimentAction}
+    requested_action::Union{Nothing,AbstractExperimentAction}
     validation_valid::Union{Nothing,Bool}
     validation_code::Union{Nothing,String}
     consumed_intervention::Bool
-    observation::Union{Nothing,Observation}
+    observation::Union{Nothing,AbstractPolicyObservation}
     remaining_budget::Int
     status::String
     elapsed_seconds::Union{Nothing,Float64}
@@ -74,6 +75,7 @@ struct ArtifactActionLimits
 end
 artifact_limits(l::ActionLimits) = ArtifactActionLimits(l.displacement_m, l.velocity_m_per_s,
     l.drive_acceleration_m_per_s2, l.drive_frequency_hz, l.duration_s, l.cadence_s, l.max_samples)
+artifact_limits(l) = l
 
 struct ProtocolSettings
     observation_noise_disclosed::Bool
@@ -88,23 +90,32 @@ end
 struct PublicRunArtifact
     run_id::String
     experiment_version::String
+    environment_id::Union{Nothing,String}
+    environment_version::Union{Nothing,String}
+    action_schema_version::Union{Nothing,String}
+    observation_schema_version::Union{Nothing,String}
     created_at::String
     finalized_at::Union{Nothing,String}
     status::String
     task_description::String
-    action_limits::ArtifactActionLimits
+    action_limits::Union{ArtifactActionLimits,NamedTuple,AbstractDict}
     intervention_budget::Int
     protocol_settings::ProtocolSettings
     policy_identity::PolicyIdentity
     events::Tuple{Vararg{RunEvent}}
     terminal::Union{Nothing,TerminalResult}
-    function PublicRunArtifact(; run_id=new_run_id(), experiment_version="v0",
+    function PublicRunArtifact(; run_id=new_run_id(), experiment_version="v0", environment_id=nothing,
+            environment_version=nothing, action_schema_version=nothing, observation_schema_version=nothing,
             created_at=string(now(UTC)), finalized_at=nothing, status="running",
             task_description, action_limits, intervention_budget, protocol_settings,
             policy_identity, events=(), terminal=nothing)
         _validate_run_id(run_id); status in STATUSES || throw(ArgumentError("unsupported run status"))
         intervention_budget >= 0 || throw(ArgumentError("budget must be nonnegative"))
-        new(String(run_id), String(experiment_version), String(created_at), finalized_at,
+        new(String(run_id), String(experiment_version), environment_id === nothing ? nothing : String(environment_id),
+            environment_version === nothing ? nothing : String(environment_version),
+            action_schema_version === nothing ? nothing : String(action_schema_version),
+            observation_schema_version === nothing ? nothing : String(observation_schema_version),
+            String(created_at), finalized_at,
             String(status), String(task_description), action_limits, Int(intervention_budget),
             protocol_settings, policy_identity, Tuple(events), terminal)
     end
@@ -130,11 +141,15 @@ end
 struct EvaluatorArtifact
     schema_version::Int
     run_id::String
-    damping_ratio::Float64
-    natural_frequency_rad_s::Float64
+    truth::NamedTuple
     condition_id::Union{Nothing,String}
     evaluator_metadata::NamedTuple
     failures::Tuple{Vararg{EvaluatorFailure}}
+end
+function Base.getproperty(a::EvaluatorArtifact, name::Symbol)
+    name === :damping_ratio && return getfield(a, :truth).damping_ratio
+    name === :natural_frequency_rad_s && return getfield(a, :truth).natural_frequency_rad_s
+    getfield(a, name)
 end
 
 new_run_id() = string(uuid4())
@@ -184,15 +199,13 @@ function capture_provenance(run_id::String; root=pwd(), world=nothing, world_see
         policy_seed=nothing, repetition_id=nothing, configuration=(;))
     _validate_run_id(run_id)
     if world !== nothing
-        world isa OscillatorWorld || throw(ArgumentError("world must be an OscillatorWorld"))
-        actual_seed = metadata(world).world_seed
+        world isa AbstractEnvironment || throw(ArgumentError("world must implement AbstractEnvironment"))
+        world_metadata = metadata(world)
+        actual_seed = hasproperty(world_metadata, :world_seed) ? world_metadata.world_seed : nothing
         world_seed !== nothing && world_seed != actual_seed &&
             throw(ArgumentError("world_seed conflicts with world provenance"))
         world_seed = actual_seed
-        config = world.config
-        environment = (solver=metadata(world).solver, reltol=config.reltol, abstol=config.abstol,
-            final_time_s=config.final_time, sample_count=config.sample_count)
-        configuration = merge(configuration, environment)
+        configuration = merge(configuration, environment_provenance(world))
     end
     commit = _repository_value(root, "rev-parse", "HEAD")
     dirty_text = _repository_value(root, "status", "--porcelain")
@@ -205,13 +218,15 @@ function capture_provenance(run_id::String; root=pwd(), world=nothing, world_see
         repetition_id, configuration)
 end
 
-evaluator_artifact(world::OscillatorWorld, run_id; condition_id=nothing, evaluator_metadata=(;), failures=EvaluatorFailure[]) = begin
+evaluator_artifact(world::AbstractEnvironment, run_id; condition_id=nothing, evaluator_metadata=(;), failures=EvaluatorFailure[]) = begin
     t = evaluator_truth(world)
-    EvaluatorArtifact(SCHEMA_VERSION, run_id, t.damping_ratio, t.natural_frequency,
+    t isa NamedTuple || throw(ArgumentError("evaluator truth must be a NamedTuple"))
+    EvaluatorArtifact(SCHEMA_VERSION, run_id, t,
         condition_id, evaluator_metadata, Tuple(failures))
 end
 
 _dict(x::NamedTuple) = Dict(string(k) => v for (k,v) in pairs(x))
+_dict(x::AbstractDict) = Dict(string(k) => v for (k,v) in pairs(x))
 _dict(x::OperationalMetadata) = Dict(string(k) => getfield(x, k) for k in fieldnames(OperationalMetadata))
 _dict(x::ArtifactActionLimits) = Dict(string(k) => getfield(x, k) for k in fieldnames(ArtifactActionLimits))
 _dict(x::ProtocolSettings) = Dict(string(k) => getfield(x, k) for k in fieldnames(ProtocolSettings))
@@ -220,12 +235,9 @@ _failure(x) = x === nothing ? nothing : Dict("code"=>x.code, "public_message"=>x
     "stage_index"=>x.stage_index)
 _evaluator_failure(x) = x === nothing ? nothing : Dict("code"=>x.code,
     "stage_index"=>x.stage_index, "diagnostic"=>x.diagnostic)
-_action(x) = x === nothing ? nothing : Dict("initial_displacement_m"=>x.initial_displacement_m,
-    "initial_velocity_m_per_s"=>x.initial_velocity_m_per_s,
-    "drive_acceleration_m_per_s2"=>x.drive_acceleration_m_per_s2, "drive_frequency_hz"=>x.drive_frequency_hz)
-_observation(x) = x === nothing ? nothing : Dict("measurements"=>[Dict("time_s"=>m.time_s,
-    "displacement_m"=>m.displacement_m, "uncertainty_m"=>m.uncertainty_m) for m in x.measurements],
-    "noise_model"=>x.noise_model, "noise_scale_m"=>x.noise_scale_m)
+_json_value(x) = JSON3.read(JSON3.write(x), Dict{String,Any})
+_action(x) = x === nothing ? nothing : _json_value(x)
+_observation(x) = x === nothing ? nothing : _json_value(x)
 _event(e) = Dict("sequence"=>e.sequence, "requested_action"=>_action(e.requested_action),
     "validation_valid"=>e.validation_valid, "validation_code"=>e.validation_code,
     "consumed_intervention"=>e.consumed_intervention, "observation"=>_observation(e.observation),
@@ -238,6 +250,8 @@ _terminal(t) = t === nothing ? nothing : Dict("status"=>t.status, "final_output"
 
 function _public(a)
     Dict("schema_version"=>SCHEMA_VERSION, "run_id"=>a.run_id, "experiment_version"=>a.experiment_version,
+        "environment_id"=>a.environment_id, "environment_version"=>a.environment_version,
+        "action_schema_version"=>a.action_schema_version, "observation_schema_version"=>a.observation_schema_version,
         "created_at"=>a.created_at, "finalized_at"=>a.finalized_at, "status"=>a.status,
         "task_description"=>a.task_description, "action_limits"=>_dict(a.action_limits),
         "intervention_budget"=>a.intervention_budget, "protocol_settings"=>_dict(a.protocol_settings),
@@ -249,10 +263,16 @@ _provenance(p) = Dict("schema_version"=>p.schema_version, "run_id"=>p.run_id,
     "manifest_sha256"=>p.manifest_sha256, "platform"=>p.platform,
     "world_seed"=>p.world_seed, "noise_seed"=>p.noise_seed, "policy_seed"=>p.policy_seed,
     "repetition_id"=>p.repetition_id, "configuration"=>_dict(p.configuration))
-_evaluator(e) = Dict("schema_version"=>e.schema_version, "run_id"=>e.run_id,
-    "truth"=>Dict("damping_ratio"=>e.damping_ratio, "natural_frequency_rad_s"=>e.natural_frequency_rad_s),
+function _evaluator(e)
+    truth = _dict(e.truth)
+    if haskey(truth, "natural_frequency")
+        truth["natural_frequency_rad_s"] = pop!(truth, "natural_frequency")
+    end
+    Dict("schema_version"=>e.schema_version, "run_id"=>e.run_id,
+    "truth"=>truth,
     "condition_id"=>e.condition_id, "evaluator_metadata"=>_dict(e.evaluator_metadata),
     "failures"=>_evaluator_failure.(e.failures))
+end
 
 function write_run(root::AbstractString, public::PublicRunArtifact, provenance::ProvenanceArtifact,
         evaluator::EvaluatorArtifact)

@@ -40,21 +40,16 @@ function _http_transport(url, headers, body)
     HTTP.post(url, headers, body; status_exception=false, readtimeout=120)
 end
 
-const ACTION_SCHEMA = Dict("type"=>"object", "properties"=>Dict(
-    "initial_displacement_m"=>Dict("type"=>"number"),
-    "initial_velocity_m_per_s"=>Dict("type"=>"number"),
-    "drive_acceleration_m_per_s2"=>Dict("type"=>"number"),
-    "drive_frequency_hz"=>Dict("type"=>"number")),
-    "required"=>["initial_displacement_m", "initial_velocity_m_per_s",
-        "drive_acceleration_m_per_s2", "drive_frequency_hz"], "additionalProperties"=>false)
-
 function openrouter_payload(config::OpenRouterConfig, req::ModelRequest)
     config.prompt_version == req.prompt_version || throw(PolicyFailure(:configuration_failure))
+    req.action_schema === nothing && throw(PolicyFailure(:configuration_failure))
     user_payload = (task_description=req.task_description,
         action_limits=req.limits,
         remaining_intervention_budget=req.remaining_intervention_budget,
         remaining_decision_opportunities=req.remaining_decision_opportunities,
         public_decision_history=req.history)
+    legacy_v01 = req.prompt_version == "scientist-v0-1"
+    legacy_v01 || (user_payload = merge(user_payload, (action_schema=req.action_schema,)))
     payload = Dict{String,Any}(
         "model"=>config.model,
         "messages"=>[(role="system", content=req.system_instruction),
@@ -64,7 +59,7 @@ function openrouter_payload(config::OpenRouterConfig, req::ModelRequest)
         "max_completion_tokens"=>config.max_completion_tokens, "reasoning"=>Dict("effort"=>config.reasoning_effort),
         "usage"=>Dict("include"=>true), "stream"=>false,
         "response_format"=>Dict("type"=>"json_schema", "json_schema"=>Dict(
-            "name"=>"experiment_action", "strict"=>true, "schema"=>ACTION_SCHEMA)))
+            "name"=>"experiment_action", "strict"=>true, "schema"=>req.action_schema)))
     config.seed === nothing || (payload["seed"] = config.seed)
     payload
 end

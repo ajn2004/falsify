@@ -13,10 +13,36 @@ export OscillatorConfig, OscillatorExperiment, CleanOscillatorObservation,
        OscillatorTaskDescription, OscillatorMetadata, OscillatorWorld,
        generate_world, observe, public_task, evaluator_truth, metadata
 
+export AbstractEnvironment, AbstractExperimentAction, AbstractPolicyObservation,
+       environment_id, environment_version, action_schema, action_schema_version,
+       observation_schema_version, parse_action, validate_environment_action,
+       execute_experiment, apply_environment_noise, public_action, public_observation,
+       environment_provenance, legacy_action_schema, legacy_parse_action, validate_schedule,
+       decision_with_parser
+
 export ObservationNoise, CleanObservation, GaussianObservationNoise,
        apply_measurement_process, NOISE_IMPLEMENTATION_VERSION
 
 abstract type ObservationNoise end
+"""Private simulator/world abstraction. Only explicit public DTOs cross to policies."""
+abstract type AbstractEnvironment end
+policy_contract_profile(::AbstractEnvironment) = "scientist-v0-2-schema-driven-v1"
+abstract type AbstractExperimentAction end
+abstract type AbstractPolicyObservation end
+
+environment_id(::AbstractEnvironment) = throw(MethodError(environment_id, ()))
+environment_version(::AbstractEnvironment) = "1"
+action_schema_version(::AbstractEnvironment) = "1"
+observation_schema_version(::AbstractEnvironment) = "1"
+action_schema(::AbstractEnvironment) = throw(MethodError(action_schema, ()))
+parse_action(::Type{<:AbstractEnvironment}, ::AbstractString) = throw(MethodError(parse_action, ()))
+validate_environment_action(::AbstractEnvironment, ::AbstractExperimentAction) = throw(MethodError(validate_environment_action, ()))
+execute_experiment(::AbstractEnvironment, ::AbstractExperimentAction) = throw(MethodError(execute_experiment, ()))
+apply_environment_noise(::AbstractEnvironment, clean, noise::ObservationNoise, seed, index) =
+    throw(MethodError(apply_environment_noise, ()))
+public_action(::AbstractEnvironment, action::AbstractExperimentAction) = throw(MethodError(public_action, ()))
+public_observation(::AbstractEnvironment, observation::AbstractPolicyObservation) = throw(MethodError(public_observation, ()))
+environment_provenance(::AbstractEnvironment) = (;)
 struct CleanObservation <: ObservationNoise end
 struct GaussianObservationNoise <: ObservationNoise
     sigma_m::Float64
@@ -80,7 +106,7 @@ struct OscillatorTruth
 end
 
 """Evaluator-owned world. Do not pass this object to a policy."""
-struct OscillatorWorld
+struct OscillatorWorld <: AbstractEnvironment
     truth::OscillatorTruth
     config::OscillatorConfig
     provenance::OscillatorMetadata
@@ -111,6 +137,9 @@ public_task(world::OscillatorWorld) = OscillatorTaskDescription(
     world.config.final_time, world.config.sample_count, X0_RANGE, V0_RANGE, DRIVE_ACCELERATION_RANGE, DRIVE_FREQUENCY_RANGE)
 
 metadata(world::OscillatorWorld) = world.provenance
+environment_provenance(world::OscillatorWorld) = (solver=world.provenance.solver,
+    reltol=world.config.reltol, abstol=world.config.abstol,
+    final_time_s=world.config.final_time, sample_count=world.config.sample_count)
 evaluator_truth(world::OscillatorWorld) = (damping_ratio=world.truth.damping_ratio,
     natural_frequency=world.truth.natural_frequency)
 
@@ -144,12 +173,20 @@ export ExperimentAction, to_environment_action, Measurement, Observation, Public
        DecisionHistoryEntry, PolicyDecision, OperationalMetadata, PolicyFailure, policy_seed, next_decision
 
 """Policy-facing oscillator controls, with SI units explicit in field names."""
-Base.@kwdef struct ExperimentAction
+Base.@kwdef struct ExperimentAction <: AbstractExperimentAction
     initial_displacement_m::Float64 = 1.0
     initial_velocity_m_per_s::Float64 = 0.0
     drive_acceleration_m_per_s2::Float64 = 0.0
     drive_frequency_hz::Float64 = 0.0
 end
+const V01_ACTION_SCHEMA = Dict("type"=>"object", "properties"=>Dict(
+    "initial_displacement_m"=>Dict("type"=>"number"),
+    "initial_velocity_m_per_s"=>Dict("type"=>"number"),
+    "drive_acceleration_m_per_s2"=>Dict("type"=>"number"),
+    "drive_frequency_hz"=>Dict("type"=>"number")),
+    "required"=>["initial_displacement_m", "initial_velocity_m_per_s", "drive_acceleration_m_per_s2", "drive_frequency_hz"],
+    "additionalProperties"=>false)
+legacy_action_schema() = V01_ACTION_SCHEMA
 to_environment_action(a::ExperimentAction) = OscillatorExperiment(
     initial_displacement=a.initial_displacement_m,
     initial_velocity=a.initial_velocity_m_per_s,
@@ -188,34 +225,42 @@ struct Measurement
     displacement_m::Float64
     uncertainty_m::Union{Nothing,Float64}
 end
-struct Observation
+struct Observation <: AbstractPolicyObservation
     measurements::Tuple{Vararg{Measurement}}
     noise_model::Union{Nothing,String}
     noise_scale_m::Union{Nothing,Float64}
 end
+public_action(::OscillatorWorld, action::ExperimentAction) = action
+public_observation(::OscillatorWorld, observation::Observation) = observation
 struct TaskDescription
     model_description::String
 end
 policy_task(task::OscillatorTaskDescription) = TaskDescription(task.model_description)
+policy_task(task) = task
 """One policy-visible decision, including rejected attempts and safe failures."""
 struct DecisionHistoryEntry
-    requested_action::Union{Nothing,ExperimentAction}
+    requested_action::Union{Nothing,AbstractExperimentAction}
     validation_valid::Union{Nothing,Bool}
     validation_code::Union{Nothing,Symbol}
     consumed_intervention::Bool
-    observation::Union{Nothing,Observation}
+    observation::Union{Nothing,AbstractPolicyObservation}
     failure_code::Union{Nothing,Symbol}
     remaining_budget::Int
 end
 
-struct PublicState
-    task::TaskDescription
-    limits::ActionLimits
-    history::Tuple{Vararg{DecisionHistoryEntry}}
+struct PublicState{T,L}
+    task::T
+    limits::L
+    history::Tuple
     remaining_budget::Int
     remaining_decision_opportunities::Int
+    action_schema::Union{Nothing,AbstractDict}
+    policy_contract_profile::String
 end
-PublicState(task, limits, history, remaining_budget) = PublicState(task, limits, history, remaining_budget, typemax(Int))
+PublicState(task, limits, history, remaining_budget, remaining_decision_opportunities=typemax(Int);
+        action_schema=nothing, policy_contract_profile="scientist-v0-1") =
+    PublicState(task, limits, history, remaining_budget, remaining_decision_opportunities, action_schema,
+        String(policy_contract_profile))
 limits_for(task::OscillatorTaskDescription) = ActionLimits(
     displacement_m=task.displacement_bounds, velocity_m_per_s=task.velocity_bounds,
     drive_acceleration_m_per_s2=task.drive_acceleration_bounds_m_per_s2,
@@ -259,15 +304,46 @@ Base.@kwdef struct OperationalMetadata
     request_sha256::Union{Nothing,String}=nothing
     http_status::Union{Nothing,Int}=nothing
 end
-struct PolicyDecision
-    action::ExperimentAction
+struct PolicyDecision{A<:AbstractExperimentAction}
+    action::A
     operational_metadata::Union{Nothing,OperationalMetadata}
 end
 next_decision(policy::AbstractPolicy, state::PublicState) = PolicyDecision(next_action(policy, state), nothing)
+decision_with_parser(policy::AbstractPolicy, state::PublicState, parser::Function) = next_decision(policy, state)
 struct PolicyFailure <: Exception
     code::Symbol
     operational_metadata::Union{Nothing,OperationalMetadata}
 end
+function parse_action(::Type{OscillatorWorld}, content::AbstractString)
+    parsed = try
+        JSON3.read(content)
+    catch
+        if occursin(r"\b(?:NaN|[-+]?Infinity)\b", content) || any(eachmatch(r":\s*(-?\d+(?:\.\d+)?[eE][+-]?\d+)", content)) do m
+                value = tryparse(BigFloat, m.captures[1])
+                value !== nothing && !isfinite(Float64(value))
+            end
+            throw(PolicyFailure(:nonfinite_field))
+        end
+        throw(PolicyFailure(:malformed_response))
+    end
+    parsed isa JSON3.Object || throw(PolicyFailure(:malformed_response))
+    fields = ("initial_displacement_m", "initial_velocity_m_per_s",
+        "drive_acceleration_m_per_s2", "drive_frequency_hz")
+    keys_seen = Set(String(k) for k in keys(parsed))
+    any(field -> !(field in keys_seen), fields) && throw(PolicyFailure(:missing_required_field))
+    keys_seen == Set(fields) || throw(PolicyFailure(:malformed_response))
+    values = Float64[]
+    for field in fields
+        value = parsed[Symbol(field)]
+        value isa Real && !(value isa Bool) || throw(PolicyFailure(:invalid_field_type))
+        number = Float64(value)
+        isfinite(number) || throw(PolicyFailure(:nonfinite_field))
+        push!(values, number)
+    end
+    ExperimentAction(initial_displacement_m=values[1], initial_velocity_m_per_s=values[2],
+        drive_acceleration_m_per_s2=values[3], drive_frequency_hz=values[4])
+end
+legacy_parse_action(content::AbstractString) = parse_action(OscillatorWorld, content)
 PolicyFailure(code::Symbol) = PolicyFailure(code, nothing)
 Base.showerror(io::IO, failure::PolicyFailure) = print(io, "policy failure: ", failure.code)
 policy_seed(::AbstractPolicy) = nothing
@@ -292,6 +368,32 @@ function validate_action(a::ExperimentAction, state::PublicState)
     end
     ValidationResult(true, :accepted)
 end
+function validate_schedule(limits)
+    hasproperty(limits, :duration_s) && hasproperty(limits, :cadence_s) && hasproperty(limits, :max_samples) ||
+        return ValidationResult(false, :invalid_schedule)
+    d, c, n = limits.duration_s, limits.cadence_s, limits.max_samples
+    (isfinite(d) && d > 0 && isfinite(c) && c > 0 && n >= 1) || return ValidationResult(false, :invalid_schedule)
+    floor(Int, d / c) + 1 <= n || return ValidationResult(false, :sample_budget_exceeded)
+    ValidationResult(true, :accepted)
+end
+
+environment_id(::OscillatorWorld) = "damped_oscillator_v0_1"
+policy_contract_profile(::OscillatorWorld) = "scientist-v0-1"
+action_schema(::OscillatorWorld) = legacy_action_schema()
+validate_environment_action(::OscillatorWorld, action::ExperimentAction) =
+    _validate_oscillator_environment_action(action)
+function _validate_oscillator_environment_action(a::ExperimentAction)
+    inrange(x, bounds) = isfinite(x) && bounds[1] <= x <= bounds[2]
+    all((inrange(a.initial_displacement_m, X0_RANGE), inrange(a.initial_velocity_m_per_s, V0_RANGE),
+        inrange(a.drive_acceleration_m_per_s2, DRIVE_ACCELERATION_RANGE), inrange(a.drive_frequency_hz, DRIVE_FREQUENCY_RANGE))) ||
+        return ValidationResult(false, :out_of_bounds)
+    (a.drive_acceleration_m_per_s2 == 0 && a.drive_frequency_hz != 0) && return ValidationResult(false, :invalid_drive)
+    (a.drive_acceleration_m_per_s2 != 0 && a.drive_frequency_hz <= 0) && return ValidationResult(false, :invalid_drive)
+    ValidationResult(true, :accepted)
+end
+execute_experiment(world::OscillatorWorld, action::ExperimentAction) = observe(world, to_environment_action(action))
+apply_environment_noise(::OscillatorWorld, clean::CleanOscillatorObservation, noise::ObservationNoise, seed, index) =
+    apply_measurement_process(clean, noise, seed, index)
 
 include("artifacts/RunArtifacts.jl")
 using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,
@@ -303,17 +405,28 @@ export PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact, RunEvent,
 include("baselines/RandomPolicy.jl")
 include("baselines/FixedDesignPolicy.jl")
 export RandomPolicy, FixedDesignPolicy, policy_identity, policy_configuration
+policy_identity(policy, ::AbstractEnvironment) = policy_identity(policy)
 
 include("agents/ScientistPolicy.jl")
 using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
-     RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-      ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+      RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
+       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION,
+       GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION
+       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION,
+       GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION
 import .ScientistPolicyAPI: next_decision
 policy_identity(::ScientistPolicy) = PolicyIdentity("scientist", version=PROMPT_VERSION)
-policy_configuration(::ScientistPolicy) = (; prompt_version=PROMPT_VERSION, provider_calls="injected_client")
+policy_identity(::ScientistPolicy, world::AbstractEnvironment) = PolicyIdentity("scientist",
+    version=policy_contract_profile(world))
+_scientist_policy_configuration() = (; prompt_version=PROMPT_VERSION,
+    generic_prompt_version=GENERIC_PROMPT_VERSION,
+    prompt_selection="v0.1 compatibility schema uses frozen prompt; other schemas use generic prompt",
+    prompt_sha256=bytes2hex(SHA.sha256(SCIENTIST_PROMPT)),
+    generic_prompt_sha256=bytes2hex(SHA.sha256(GENERIC_SCIENTIST_PROMPT)),
+    provider_calls="injected_client")
+policy_configuration(::ScientistPolicy) = _scientist_policy_configuration()
 
 include("protocol/RunController.jl")
 using .RunController: RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
@@ -330,6 +443,6 @@ include("providers/OpenRouterClient.jl")
 using .OpenRouterIntegration: OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config
 export OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config
 policy_configuration(policy::ScientistPolicy{<:OpenRouterClient}) = merge(
-    (prompt_version=PROMPT_VERSION, prompt_sha256=bytes2hex(SHA.sha256(SCIENTIST_PROMPT)),),
+    _scientist_policy_configuration(),
     OpenRouterIntegration.policy_configuration(policy.client))
 end
