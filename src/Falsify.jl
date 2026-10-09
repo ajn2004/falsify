@@ -395,6 +395,11 @@ execute_experiment(world::OscillatorWorld, action::ExperimentAction) = observe(w
 apply_environment_noise(::OscillatorWorld, clean::CleanOscillatorObservation, noise::ObservationNoise, seed, index) =
     apply_measurement_process(clean, noise, seed, index)
 
+include("environments/DuffingEnvironment.jl")
+export DuffingClass, DuffingTruth, DuffingWorld, DuffingMetadata,
+       generate_duffing_world, duffing_observe, DUFFING_ZETA_RANGE,
+       DUFFING_OMEGA_RANGE, DUFFING_BETA_RANGE
+
 include("artifacts/RunArtifacts.jl")
 using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,
     RunEvent, PublicFailure, EvaluatorFailure, TerminalResult, new_run_id, capture_provenance,
