@@ -9,6 +9,7 @@ struct ContractProbeEnvironment <: Falsify.AbstractEnvironment
     truth::Float64
     world_seed::Int
 end
+
 struct ContractProbeAction <: Falsify.AbstractExperimentAction
     control_value::Float64
 end
@@ -1326,4 +1327,84 @@ end
         @test !metrics.success
         @test metrics.completion_status == "failed"
     end
+end
+
+
+@testset "DAL-151 coupled oscillator environment" begin
+    w = generate_coupled_world(3917)
+    w2 = generate_coupled_world(3917)
+    @test Falsify.evaluator_truth(w) == Falsify.evaluator_truth(w2)
+    @test generate_coupled_world(3918).truth != w.truth
+    @test 1.5 <= w.truth.stiffness_k_n_per_m <= 4.0
+    action1 = CoupledOscillatorAction(1,0,0,0,0,0)
+    action2 = CoupledOscillatorAction(0,1,0,0,0,0)
+    @test validate_environment_action(w,action1).valid
+    task=public_task(w)
+    state=PublicState(Falsify.policy_task(task),limits_for(task),(),1;action_schema=action_schema(w))
+    @test validate_environment_action(w,next_action(RandomPolicy(77),state)).valid
+    parsed=parse_action(CoupledOscillatorWorld,"""{"x1_initial_m":1,"x2_initial_m":0,"v1_initial_m_per_s":0,"v2_initial_m_per_s":0,"drive_force_n":0,"drive_frequency_hz":0}""")
+    @test parsed == action1
+    @test execute_experiment(w,action1) == execute_experiment(w2,action1)
+    trace1 = execute_experiment(w,action1)
+    @test length(trace1.time_s) == 101
+    @test all(isfinite,trace1.x1_m) && all(isfinite,trace1.x2_m)
+    @test maximum(abs,execute_experiment(w,action2).x1_m) > 1e-3
+    @test execute_experiment(w,CoupledOscillatorAction(1,-1,0,0,0,0)).x1_m != trace1.x1_m
+    @test !validate_environment_action(w,CoupledOscillatorAction(0,0,0,0,0,1)).valid
+    @test validate_environment_action(w,CoupledOscillatorAction(0,0,0,0,0,0.0)).valid
+
+    # Weak coupling converges to independent uncoupled trajectories.
+    weak = CoupledOscillatorWorld(CoupledTruth(2.5,1e-12,0.35),w.provenance)
+    zero = CoupledOscillatorWorld(CoupledTruth(2.5,0.0,0.35),w.provenance)
+    weaktrace=execute_experiment(weak,action1); zerotrace=execute_experiment(zero,action1)
+    @test maximum(abs.(weaktrace.x1_m .- zerotrace.x1_m)) < 1e-9
+    @test maximum(abs,zerotrace.x2_m) < 1e-8
+
+    modal(k,kc) = begin
+        a=k+kc; d=(k+kc)/1.5
+        b=-kc/sqrt(1.0*1.5)
+        θ=0.5*atan(2b,a-d)
+        ([cos(θ),sin(θ)],[-sin(θ),cos(θ)])
+    end
+    va,vb=modal(1.5,0.3),modal(4.0,2.0)
+    @test maximum(sqrt(sum(abs2,va[i].-vb[i])) for i in 1:2) > 1e-2
+    @test execute_experiment(w,action1).x1_m != execute_experiment(w,action2).x1_m
+
+    noise=GaussianObservationNoise(0.02)
+    n1=apply_environment_noise(w,trace1,noise,1203,1)
+    @test n1 == apply_environment_noise(w,trace1,noise,1203,1)
+    noise1=collect(n1.x1_m) .- collect(trace1.x1_m)
+    noise2=collect(n1.x2_m) .- collect(trace1.x2_m)
+    @test noise1 != noise2
+    @test n1.x1_m != apply_environment_noise(w,trace1,noise,1203,2).x1_m
+    @test apply_environment_noise(w,trace1,CleanObservation(),1203,1).x1_m == trace1.x1_m
+
+    for baseline in (RandomPolicy(77), FixedDesignPolicy())
+        baseline_run=run_experiment(w,baseline,RunConfig(4))
+        @test baseline_run.public.status == "completed"
+        @test baseline_run.public.environment_id == "coupled_damped_oscillator_v0_2"
+        @test baseline_run.public.terminal.interventions_used == 4
+    end
+
+    payload="""{"x1_initial_m":1,"x2_initial_m":0,"v1_initial_m_per_s":0,"v2_initial_m_per_s":0,"drive_force_n":0,"drive_frequency_hz":0}"""
+    captured=Ref{Union{Nothing,ModelRequest}}(nothing)
+    policy=ScientistPolicy(FakeModelClient(payload,false,captured))
+    out=run_experiment(w,policy,RunConfig(1;noise_seed=1234))
+    serialized_request=JSON3.write(captured[])
+    serialized_public=JSON3.write(out.public)
+    for secret in ("stiffness_k_n_per_m","coupling_kc_n_per_m","damping_c_n_s_per_m","world_seed","evaluator","score","artifact_path","truth_label","modal_frequency","eigenvector")
+        @test !occursin(secret,serialized_request)
+        @test !occursin(secret,serialized_public)
+    end
+    seed_token=Regex("(?<![0-9.])"*string(w.provenance.world_seed)*"(?![0-9.])")
+    @test !occursin(seed_token,serialized_request)
+    mktempdir() do dir
+        attempt=run_attempt(w,policy,RunConfig(1);artifacts_root=joinpath(dir,"runs"),run_id=string(uuid4()))
+        @test attempt.classification == "completed"
+        public_text=read(joinpath(attempt.artifact_dir,"public.json"),String)
+        @test !occursin(seed_token,public_text)
+        @test !occursin("stiffness_k_n_per_m",public_text)
+    end
+    @test metadata(w).solver == "Tsit5"
+    @test metadata(w).mass_2_kg == 1.5
 end

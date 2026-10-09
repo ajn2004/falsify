@@ -412,6 +412,8 @@ include("baselines/FixedDesignPolicy.jl")
 export RandomPolicy, FixedDesignPolicy, policy_identity, policy_configuration
 policy_identity(policy, ::AbstractEnvironment) = policy_identity(policy)
 
+include("environments/CoupledOscillator.jl")
+
 include("agents/ScientistPolicy.jl")
 using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
       RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
