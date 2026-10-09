@@ -41,6 +41,17 @@ paths into the public task, request history, validation message, or public
 artifact. Persist such values only in provenance/evaluator artifacts under the
 existing public/private split.
 
+DAL-152's `DuffingWorld` has one evaluator-owned `DuffingTruth` with a typed
+`DuffingClass`; its public environment identity and contract are class-neutral.
+World generation consumes draws in the frozen order class, ζ, ω₀, β, consuming
+the β draw for linear worlds too. The class prior is 1/2 each, shared ζ and ω₀
+supports are uniform in physical scale, and linear β is exactly zero. It reuses
+the V0.1 `ExperimentAction`, schema and stable validator, while explicitly
+selecting `scientist-v0-2-schema-driven-v1`; schema identity does not select
+prompt identity. Both branches use Tsit5 with identical tolerances and a fixed
+10 s/101-sample schedule. Indexed Gaussian noise uses the shared
+measurement-noise seed/index rule.
+
 The policy/environment boundary uses typed `ExperimentAction`, `Observation`,
 and `PublicState` values in `Falsify`. The matching machine-readable action
 shape is [`experiment-contract.schema.json`](experiment-contract.schema.json).

@@ -152,6 +152,104 @@ Falsify.request(c::ContractProbeClient, req::ModelRequest) = (c.seen[] = req; Mo
     @test classify_run("aborted", "apparatus_exception") == "apparatus_failure"
 end
 
+@testset "DAL-152 linear versus Duffing environment" begin
+    worlds = [generate_duffing_world(seed) for seed in 1:64]
+    @test any(w -> w.truth.model_class == Falsify.linear, worlds)
+    @test any(w -> w.truth.model_class == Falsify.duffing, worlds)
+    @test generate_duffing_world(42).truth == generate_duffing_world(42).truth
+    @test generate_duffing_world(42).truth.beta == (generate_duffing_world(42).truth.model_class == Falsify.linear ? 0.0 : generate_duffing_world(42).truth.beta)
+    @test all(w -> DUFFING_ZETA_RANGE[1] <= w.truth.zeta <= DUFFING_ZETA_RANGE[2] &&
+        DUFFING_OMEGA_RANGE[1] <= w.truth.omega0 <= DUFFING_OMEGA_RANGE[2] &&
+        (w.truth.model_class == Falsify.linear ? w.truth.beta == 0.0 : DUFFING_BETA_RANGE[1] <= w.truth.beta <= DUFFING_BETA_RANGE[2]), worlds)
+
+    @test action_schema(first(filter(w -> w.truth.model_class == Falsify.duffing, worlds))) == Falsify.legacy_action_schema()
+    linear_world = DuffingWorld(DuffingTruth(Falsify.linear, 0.15, 1.3, 0.0), OscillatorConfig(),
+        DuffingMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0"))
+    duffing_world = DuffingWorld(DuffingTruth(Falsify.duffing, 0.15, 1.3, 0.5), OscillatorConfig(),
+        DuffingMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0"))
+    low = ExperimentAction(initial_displacement_m=0.2)
+    high = ExperimentAction(initial_displacement_m=1.5)
+    distance(world_a, world_b, action) = sqrt(sum(abs2, duffing_observe(world_a, action).displacement .-
+        duffing_observe(world_b, action).displacement) / 101)
+    @test distance(linear_world, duffing_world, high) > 20distance(linear_world, duffing_world, low)
+    exact = duffing_observe(linear_world, high)
+    reference = observe(Falsify.OscillatorWorld(Falsify.OscillatorTruth(0.15, 1.3), OscillatorConfig(),
+        Falsify.OscillatorMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0")),
+        OscillatorExperiment(initial_displacement=1.5))
+    @test exact.displacement ≈ reference.displacement atol=1e-9
+    bad_action = ExperimentAction(drive_frequency_hz=0.8)
+    @test validate_environment_action(linear_world, bad_action).code == :invalid_drive
+    @test validate_environment_action(duffing_world, bad_action).code == :invalid_drive
+    clean_trace = duffing_observe(duffing_world, low)
+    noisy_a = Falsify.apply_environment_noise(duffing_world, clean_trace, GaussianObservationNoise(0.1), 77, 1)
+    noisy_b = Falsify.apply_environment_noise(linear_world, duffing_observe(linear_world, low), GaussianObservationNoise(0.1), 77, 1)
+    @test noisy_a isa Observation && noisy_b isa Observation
+    @test length(noisy_a.measurements) == length(noisy_b.measurements) == 101
+    @test noisy_a.noise_model == noisy_b.noise_model == "gaussian_additive"
+
+    public_artifacts = Falsify.PublicRunArtifact[]
+    for world in (linear_world, duffing_world)
+        @test Falsify.policy_contract_profile(world) == GENERIC_PROMPT_VERSION
+        @test policy_task(public_task(world)) == policy_task(public_task(duffing_world))
+        @test action_schema(world) == Falsify.legacy_action_schema()
+    end
+    seen = Ref{Union{Nothing,ModelRequest}}(nothing)
+    client = ContractProbeClient("{\"initial_displacement_m\":0.2,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}", seen)
+    req = model_request(PublicState(policy_task(public_task(duffing_world)), limits_for(public_task(duffing_world)), (), 1;
+        action_schema=action_schema(duffing_world), policy_contract_profile=Falsify.policy_contract_profile(duffing_world)))
+    @test req.prompt_version == GENERIC_PROMPT_VERSION
+    payload = Falsify.OpenRouterIntegration.openrouter_payload(OpenRouterConfig(model="mock/model",
+        provider_order=["mock"], prompt_version=GENERIC_PROMPT_VERSION), req)
+    @test haskey(JSON3.read(payload["messages"][2].content), :action_schema)
+
+    for world in (linear_world, duffing_world)
+        random_outcome = run_experiment(world, RandomPolicy(123), RunConfig(2))
+        @test random_outcome.public.status == "completed"
+        @test random_outcome.public.environment_id == "linear_vs_duffing_v0_2"
+        @test length(random_outcome.public.events) == 2
+
+        fixed_outcome = run_experiment(world, FixedDesignPolicy(), RunConfig(2))
+        @test fixed_outcome.public.status == "completed"
+        @test fixed_outcome.public.environment_id == "linear_vs_duffing_v0_2"
+        @test length(fixed_outcome.public.events) == 2
+
+        local_seen = Ref{Union{Nothing,ModelRequest}}(nothing)
+        policy = ScientistPolicy(ContractProbeClient("{\"initial_displacement_m\":0.2,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}", local_seen))
+        outcome = run_experiment(world, policy, RunConfig(1))
+        @test outcome.public.status == "completed"
+        @test outcome.public.environment_id == "linear_vs_duffing_v0_2"
+        @test outcome.public.policy_identity.version == GENERIC_PROMPT_VERSION
+        @test local_seen[].prompt_version == GENERIC_PROMPT_VERSION
+        @test length(outcome.public.events[1].observation.measurements) == 101
+        push!(public_artifacts, outcome.public)
+        @test !(:world_seed in fieldnames(typeof(local_seen[])))
+        @test !(:evaluator_metadata in fieldnames(typeof(local_seen[])))
+        @test !occursin(string(world.truth.zeta), local_seen[].task_description)
+        @test !occursin(string(world.truth.omega0), local_seen[].task_description)
+        mktempdir() do root
+            attempt = run_attempt(world, ScientistPolicy(ContractProbeClient(
+                "{\"initial_displacement_m\":0.2,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}",
+                Ref{Union{Nothing,ModelRequest}}(nothing))), RunConfig(1);
+                artifacts_root=joinpath(root, "runs"), ledger_path=joinpath(root, "ledger.jsonl"))
+            @test attempt.classification == "completed"
+            @test attempt.outcome.public.environment_id == "linear_vs_duffing_v0_2"
+            public_text = read(joinpath(attempt.artifact_dir, "public.json"), String)
+            @test occursin("H_L:", public_text) && occursin("H_D:", public_text)
+            @test !occursin("model_class", public_text)
+            @test !occursin("evaluator.json", public_text)
+        end
+    end
+    left, right = public_artifacts
+    @test left.environment_id == right.environment_id
+    @test left.environment_version == right.environment_version
+    @test left.task_description == right.task_description
+    @test left.action_limits == right.action_limits
+    @test left.policy_identity == right.policy_identity
+    @test keys(JSON3.read(JSON3.write(left))) == keys(JSON3.read(JSON3.write(right)))
+    @test typeof(left.events[1].requested_action) == typeof(right.events[1].requested_action)
+    @test typeof(left.events[1].observation) == typeof(right.events[1].observation)
+end
+
 @testset "DAL-155 reliability report reconciliation" begin
     R = ReliabilityReportV02
     root = normpath(joinpath(@__DIR__, ".."))
