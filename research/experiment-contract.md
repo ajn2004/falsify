@@ -41,6 +41,44 @@ paths into the public task, request history, validation message, or public
 artifact. Persist such values only in provenance/evaluator artifacts under the
 existing public/private split.
 
+## DAL-154 adaptive and open-loop LLM treatments
+
+V0.2 distinguishes `scientist_adaptive` (`scientist-v0-2-schema-driven-v1`)
+from `scientist_open_loop` (`scientist-v0-2-open-loop-v1`). Adaptive requests
+retain public task, legal limits, environment schema, remaining budget, and the
+public action/validation/observation history at each decision. V0.1 retains its
+frozen `scientist` / `scientist-v0-1` request and prompt.
+
+Open-loop makes one schedule request before experiment 1. Its dedicated
+`OpenLoopScheduleRequest` contains only prompt version/instruction, public task,
+legal limits, environment action schema, and total intervention budget. It has
+no history or observation member and no world, seed, truth, evaluator metadata,
+or artifact path. The response is a strict root object `{"actions":[...]}`;
+each array item uses that environment's existing action schema and parser, and
+the array length is exactly the requested budget. The complete parsed schedule
+is cached before the first action and returned in order unchanged. It is not
+repaired or regenerated after observations or validation outcomes.
+
+Malformed JSON/root/action content and wrong schedule length are behavioral
+failures (`malformed_schedule`, `wrong_schedule_length`); actual provider
+delivery errors retain DAL-155 infrastructure codes. Parsed but semantically
+invalid actions pass unchanged to ordinary controller validation. Rejected
+actions do not cause schedule replacement. If all committed actions have been
+attempted while intervention budget remains, the next decision visibly fails
+as `open_loop_schedule_exhausted`. The schedule policy instance is single-run;
+reuse at a fresh history is rejected. The schedule-generation call's provider
+metadata/cost appears only on the first event; later scheduled actions have no
+provider-call metadata, so one request is counted once.
+
+Adaptive and open-loop use the same injected client / OpenRouter model,
+provider ordering/fallback, reasoning effort, token cap, seed, gateway, and
+transport configuration. Only the necessarily distinct prompt and response
+schema differ. Open-loop is a control for LLM experiment-set quality; adaptive
+additionally permits observation-conditioned selection. This distinction is
+not a claim that either treatment is superior. DAL-156 must freeze the final
+budget, noise regimes, sample size, and exhaustion/failure handling before
+confirmatory work.
+
 DAL-152's `DuffingWorld` has one evaluator-owned `DuffingTruth` with a typed
 `DuffingClass`; its public environment identity and contract are class-neutral.
 World generation consumes draws in the frozen order class, ζ, ω₀, β, consuming

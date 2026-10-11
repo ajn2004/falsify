@@ -1,0 +1,5 @@
+# DAL-156 pilot selection template. No pilot is executed by DAL-154.
+# Use either adaptive_llm or open_loop_llm with the same provider configuration.
+policy = "adaptive_llm"
+environment = "coupled_damped_oscillator_v0_2"
+provider_config = "v0.1-frontier.toml"

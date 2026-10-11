@@ -4,7 +4,8 @@ using HTTP
 using JSON3
 using TOML
 using SHA
-using ..Falsify: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata, OperationalMetadata, PolicyFailure
+using ..Falsify: AbstractModelClient, ModelRequest, OpenLoopScheduleRequest, OPEN_LOOP_PROMPT_VERSION,
+    ModelResponse, ModelMetadata, OperationalMetadata, PolicyFailure
 import ..Falsify: request, policy_configuration
 
 export OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config
@@ -40,15 +41,21 @@ function _http_transport(url, headers, body)
     HTTP.post(url, headers, body; status_exception=false, readtimeout=120)
 end
 
-function openrouter_payload(config::OpenRouterConfig, req::ModelRequest)
-    config.prompt_version == req.prompt_version || throw(PolicyFailure(:configuration_failure))
+function openrouter_payload(config::OpenRouterConfig, req::Union{ModelRequest,OpenLoopScheduleRequest})
+    configured_prompt_ok = req.prompt_version == OPEN_LOOP_PROMPT_VERSION ?
+        config.prompt_version in ("scientist-v0-1", "scientist-v0-2-schema-driven-v1") :
+        (config.prompt_version == req.prompt_version ||
+         (req.prompt_version == "scientist-v0-2-schema-driven-v1" && config.prompt_version == "scientist-v0-1"))
+    configured_prompt_ok || throw(PolicyFailure(:configuration_failure))
     req.action_schema === nothing && throw(PolicyFailure(:configuration_failure))
-    user_payload = (task_description=req.task_description,
+    user_payload = req isa OpenLoopScheduleRequest ? (task_description=req.task_description,
+        action_limits=req.limits, intervention_budget=req.intervention_budget,
+        action_schema=req.action_schema) : (task_description=req.task_description,
         action_limits=req.limits,
         remaining_intervention_budget=req.remaining_intervention_budget,
         remaining_decision_opportunities=req.remaining_decision_opportunities,
         public_decision_history=req.history)
-    legacy_v01 = req.prompt_version == "scientist-v0-1"
+    legacy_v01 = req isa ModelRequest && req.prompt_version == "scientist-v0-1"
     legacy_v01 || (user_payload = merge(user_payload, (action_schema=req.action_schema,)))
     payload = Dict{String,Any}(
         "model"=>config.model,
@@ -59,7 +66,11 @@ function openrouter_payload(config::OpenRouterConfig, req::ModelRequest)
         "max_completion_tokens"=>config.max_completion_tokens, "reasoning"=>Dict("effort"=>config.reasoning_effort),
         "usage"=>Dict("include"=>true), "stream"=>false,
         "response_format"=>Dict("type"=>"json_schema", "json_schema"=>Dict(
-            "name"=>"experiment_action", "strict"=>true, "schema"=>req.action_schema)))
+            "name"=>req isa OpenLoopScheduleRequest ? "experiment_schedule" : "experiment_action",
+            "strict"=>true, "schema"=>req isa OpenLoopScheduleRequest ?
+                Dict("type"=>"object", "properties"=>Dict("actions"=>Dict("type"=>"array",
+                    "items"=>req.action_schema, "minItems"=>req.intervention_budget,
+                    "maxItems"=>req.intervention_budget)), "required"=>["actions"], "additionalProperties"=>false) : req.action_schema)))
     config.seed === nothing || (payload["seed"] = config.seed)
     payload
 end
@@ -91,7 +102,7 @@ end
 _operational(m::ModelMetadata) = OperationalMetadata(gateway=m.gateway, provider=m.provider, model=m.model,
     request_id=m.request_id, input_tokens=m.input_tokens, output_tokens=m.output_tokens, latency_s=m.latency_s,
     cost=m.cost, finish_reason=m.finish_reason, request_sha256=m.request_sha256, http_status=m.http_status)
-function request(client::OpenRouterClient, req::ModelRequest)::ModelResponse
+function request(client::OpenRouterClient, req::Union{ModelRequest,OpenLoopScheduleRequest})::ModelResponse
     key = try String(client.key_getter()) catch; "" end
     isempty(strip(key)) && throw(PolicyFailure(:configuration_failure))
     body = JSON3.write(openrouter_payload(client.config, req))
