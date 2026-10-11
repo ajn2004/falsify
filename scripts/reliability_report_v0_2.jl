@@ -5,6 +5,7 @@ module ReliabilityReportV02
 using JSON3
 
 readj(path) = [JSON3.read(line) for line in eachline(path) if !isempty(strip(line))]
+const LLM_POLICIES = ("scientist", "scientist_adaptive", "scientist_open_loop")
 
 function summarize(execution_dir; threshold=0.95, output=nothing)
     0 < threshold <= 1 || throw(ArgumentError("threshold must be in (0,1]"))
@@ -22,9 +23,9 @@ function summarize(execution_dir; threshold=0.95, output=nothing)
         id = String(row.run_id); haskey(starts, id) || error("ledger attempt absent from journal: $id")
         j = starts[id]; slot = String(j.slot_id)
         push!(get!(byslot, slot, Any[]), row)
-        String(j.policy) == "scientist" && push!(scientist_attempts, row)
+        String(j.policy) in LLM_POLICIES && push!(scientist_attempts, row)
     end
-    scientist_slots = filter(s -> s.policy == "scientist", plan.slots)
+    scientist_slots = filter(s -> String(s.policy) in LLM_POLICIES, plan.slots)
     codes = Dict{String,Int}()
     attempt_numbers = Dict{String,Int}()
     attempt_counts = Dict{String,Int}()
@@ -49,7 +50,10 @@ function summarize(execution_dir; threshold=0.95, output=nothing)
         terminal_attempt = Base.last(attempts)
         saved_slot = only(filter(s -> s.slot_id == slot.slot_id, state.slots))
         Set(String.(saved_slot.run_ids)) == Set(String.(a.run_id for a in attempts)) || error("resume slot/attempt ledger mismatch: $id")
-        push!(slot_records, (slot_id=id, condition_id=String(slot.condition_id), world_seed=Int(slot.world_seed),
+        push!(slot_records, (slot_id=id, policy=String(slot.policy),
+            environment=hasproperty(slot,:environment) ? String(slot.environment) : "unspecified",
+            noise_condition=hasproperty(slot,:noise_condition) ? String(slot.noise_condition) : String(slot.condition_id),
+            condition_id=String(slot.condition_id), world_seed=Int(slot.world_seed),
             attempt_count=length(attempts), resolution=String(terminal_attempt.classification),
             terminal_infrastructure=terminal_attempt.classification == "infrastructure",
             recovered_infrastructure=length(attempts)==2 && first(attempts).classification=="infrastructure" && terminal_attempt.classification!="infrastructure"))
@@ -57,8 +61,9 @@ function summarize(execution_dir; threshold=0.95, output=nothing)
     attempt_details = Any[]
     for row in ledger
         j = starts[String(row.run_id)]
-        String(j.policy) == "scientist" || continue
-        rawdir = joinpath(dirname(dirname(execution_dir)), "results", "raw", String(row.run_id))
+        String(j.policy) in LLM_POLICIES || continue
+        pilot_raw = joinpath(execution_dir,"raw",String(row.run_id))
+        rawdir = isdir(pilot_raw) ? pilot_raw : joinpath(dirname(dirname(execution_dir)), "results", "raw", String(row.run_id))
         pubpath = joinpath(rawdir, "public.json")
         pub = isfile(pubpath) ? JSON3.read(read(pubpath, String)) : nothing
         provpath = joinpath(rawdir, "provenance.json")
@@ -90,21 +95,35 @@ function summarize(execution_dir; threshold=0.95, output=nothing)
     recovered = count(x -> x.recovered_infrastructure, slot_records)
     denom = length(slot_records)
     rate = denom == 0 ? 0.0 : (denom-terminal_infra)/denom
-    conditions = Dict{String,Any}()
+    summarize(xs)=(logical_slots=length(xs),raw_attempts=sum(x.attempt_count for x in xs),
+        completed_slots=count(x->x.resolution=="completed",xs),
+        terminal_infrastructure_slots=count(x->x.terminal_infrastructure,xs),
+        recovered_infrastructure_slots=count(x->x.recovered_infrastructure,xs),
+        behavioral_failures=count(x->x.resolution=="behavioral_failure",xs),
+        apparatus_failures=count(x->x.resolution=="apparatus_failure",xs),
+        infrastructure_success_rate=isempty(xs) ? 0.0 : (length(xs)-count(x->x.terminal_infrastructure,xs))/length(xs),
+        retry_violations=count(v->any(x->startswith(v,x.slot_id),xs),retry_violations),gate_pass=!isempty(xs)&&
+            (length(xs)-count(x->x.terminal_infrastructure,xs))/length(xs)>=threshold&&
+            count(v->any(x->startswith(v,x.slot_id),xs),retry_violations)==0&&
+            !any(x->x.resolution=="apparatus_failure",xs))
+    breakdown(field)=Dict(string(value)=>summarize(filter(x->getproperty(x,field)==value,slot_records))
+        for value in sort!(unique(getproperty(x,field) for x in slot_records)))
+    by_policy=breakdown(:policy); by_environment=breakdown(:environment); by_noise_condition=breakdown(:noise_condition)
+    conditions=Dict{String,Any}()
     for condition in sort!(unique(x.condition_id for x in slot_records))
-        xs = filter(x -> x.condition_id == condition, slot_records)
-        conditions[condition] = (logical_slots=length(xs), terminal_infrastructure_slots=count(x->x.terminal_infrastructure,xs),
-            behavioral_terminal_slots=count(x->x.resolution=="behavioral_failure",xs),
-            infrastructure_success_rate=(length(xs)-count(x->x.terminal_infrastructure,xs))/length(xs))
+        conditions[condition]=summarize(filter(x->x.condition_id==condition,slot_records))
     end
+    apparatus_failures=count(x->x.resolution=="apparatus_failure",slot_records)
+    gate_pass=rate>=threshold&&isempty(retry_violations)&&apparatus_failures==0
     report = (report_version="falsify-reliability-report-v1", protocol_version=String(plan.protocol_id),
         total_logical_slots=denom, total_raw_attempts=length(scientist_attempts),
         all_policy_raw_attempts=length(ledger), completed_slots=completed,
         behavioral_terminal_slots=behavioral, infrastructure_terminal_slots=terminal_infra,
         recovered_infrastructure_slots=recovered, infrastructure_success_rate=rate,
-        failure_counts_by_code=codes, by_condition=conditions, attempts=attempt_details, duplicate_slot_audit="pass",
+        failure_counts_by_code=codes, by_condition=conditions, by_policy, by_environment, by_noise_condition,
+        attempts=attempt_details, duplicate_slot_audit="pass",
         apparatus_failure_slots=apparatus_slots, retry_bound_violations=retry_violations, retry_max_attempts=2, threshold=Float64(threshold),
-        gate_pass=rate >= threshold && isempty(retry_violations) && isempty(apparatus_slots), gate_denominator="planned ScientistPolicy logical slots",
+        gate_pass, gate_denominator="planned LLM logical treatment slots",
         recovered_slots_count_as_success=true, behavioral_failures_count_as_infrastructure_failure=false,
         apparatus_defects_count_as_gate_failure=true)
     if output !== nothing

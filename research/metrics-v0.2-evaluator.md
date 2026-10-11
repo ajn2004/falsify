@@ -78,9 +78,10 @@ endpoints. These are evaluator correctness contracts, not benchmark results.
 Offline materialization:
 
 ```sh
-julia +1.12.7 --project=. scripts/materialize_v0_2_scores.jl <run-root> <output-dir>
+julia +1.12.7 --project=. scripts/materialize_v0_2_scores.jl <run-root> <output-dir> <explicit-evaluator-config.json>
 ```
 
-It reads persisted public/evaluator records only, performs no policy/provider
+The third argument is required; the materializer does not fall back to
+`V02EvaluatorConfig()` defaults. It reads persisted public/evaluator records only, performs no policy/provider
 calls, and writes JSONL plus provenance containing score/config versions,
 config hash, code and manifest identity, source artifact hashes, and timestamp.

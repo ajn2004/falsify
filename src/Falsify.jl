@@ -382,9 +382,10 @@ policy_contract_profile(::OscillatorWorld) = "scientist-v0-1"
 action_schema(::OscillatorWorld) = legacy_action_schema()
 validate_environment_action(::OscillatorWorld, action::ExperimentAction) =
     _validate_oscillator_environment_action(action)
-function _validate_oscillator_environment_action(a::ExperimentAction)
+function _validate_oscillator_environment_action(a::ExperimentAction;
+        displacement_bounds=X0_RANGE, velocity_bounds=V0_RANGE)
     inrange(x, bounds) = isfinite(x) && bounds[1] <= x <= bounds[2]
-    all((inrange(a.initial_displacement_m, X0_RANGE), inrange(a.initial_velocity_m_per_s, V0_RANGE),
+    all((inrange(a.initial_displacement_m, displacement_bounds), inrange(a.initial_velocity_m_per_s, velocity_bounds),
         inrange(a.drive_acceleration_m_per_s2, DRIVE_ACCELERATION_RANGE), inrange(a.drive_frequency_hz, DRIVE_FREQUENCY_RANGE))) ||
         return ValidationResult(false, :out_of_bounds)
     (a.drive_acceleration_m_per_s2 == 0 && a.drive_frequency_hz != 0) && return ValidationResult(false, :invalid_drive)

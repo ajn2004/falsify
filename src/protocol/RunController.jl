@@ -168,7 +168,7 @@ function run_experiment(world::AbstractEnvironment, policy, config::RunConfig;
     end
     validate_run_events(events, config.intervention_budget, terminal)
     ident = policy_identity(policy, world)
-    public = PublicRunArtifact(; run_id, status, finalized_at=string(now(UTC)),
+    public = PublicRunArtifact(; run_id, status, protocol_id, finalized_at=string(now(UTC)),
         environment_id=environment_id(world), environment_version=environment_version(world),
         action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
         task_description=task.model_description, action_limits=artifact_limits(limits),
@@ -187,8 +187,9 @@ function run_experiment(world::AbstractEnvironment, policy, config::RunConfig;
         EvaluatorFailure[EvaluatorFailure(APPARATUS_FAILURE_CODE;
             diagnostic=_exception_name(abort_exception), stage_index=opportunities)] :
         EvaluatorFailure[]
+    protocol_metadata = protocol_id === nothing ? (;) : (protocol_id=protocol_id,)
     evaluator = evaluator_artifact(world, run_id; condition_id,
-        evaluator_metadata=status == "aborted" ? (abort_stage=abort_stage,) : (;),
+        evaluator_metadata=merge(protocol_metadata, status == "aborted" ? (abort_stage=abort_stage,) : (;)),
         failures=evaluator_failures)
     RunOutcome(public, provenance, evaluator)
 end
@@ -202,7 +203,7 @@ function _aborted_outcome(world::AbstractEnvironment, policy, config::RunConfig,
     ident = try policy_identity(policy, world) catch; PolicyIdentity("unidentified") end
     terminal = TerminalResult("aborted", nothing,
         PublicFailure(APPARATUS_FAILURE_CODE), 0, 0, 0)
-    public = PublicRunArtifact(; run_id, status="aborted", finalized_at=string(now(UTC)),
+    public = PublicRunArtifact(; run_id, status="aborted", protocol_id, finalized_at=string(now(UTC)),
         environment_id=environment_id(world), environment_version=environment_version(world),
         action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),
         task_description=task.model_description, action_limits=artifact_limits(limits),
@@ -219,7 +220,7 @@ function _aborted_outcome(world::AbstractEnvironment, policy, config::RunConfig,
             sigma_m=config.observation_noise isa CleanObservation ? 0.0 : config.observation_noise.sigma_m,
             max_decision_opportunities=config.max_decision_opportunities))
     evaluator = evaluator_artifact(world, run_id; condition_id,
-        evaluator_metadata=(unfinalized_events=true,),
+        evaluator_metadata=merge(protocol_id===nothing ? (;) : (protocol_id=protocol_id,), (unfinalized_events=true,)),
         failures=[EvaluatorFailure(APPARATUS_FAILURE_CODE; diagnostic=_exception_name(failure))])
     RunOutcome(public, provenance, evaluator)
 end
@@ -289,7 +290,7 @@ function run_attempt(world::AbstractEnvironment, policy, config::RunConfig;
         classification = APPARATUS_FAILURE_CLASS
         failure_code = "artifact_persistence_failure"
     end
-    record = (schema_version=1, recorded_at=string(now(UTC)), run_id,
+    record = (schema_version=1, recorded_at=string(now(UTC)), run_id, protocol_id,
         status, classification,
         environment_id=environment_id(world), environment_version=environment_version(world),
         action_schema_version=action_schema_version(world), observation_schema_version=observation_schema_version(world),

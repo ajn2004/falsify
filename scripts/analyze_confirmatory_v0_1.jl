@@ -446,7 +446,7 @@ function operation_totals(root, ledger)
     (actual=actual, missing=missing, bypolicy=bypolicy, missing_by_policy=missing_by_policy)
 end
 
-function analyze(root=normpath(joinpath(@__DIR__,"..")))
+function analyze(root=normpath(joinpath(@__DIR__,"..")); output_dir=joinpath(root,OUT), findings_path=joinpath(root,"research","findings-v0.1.md"))
     VERSION==v"1.12.7" || error("Julia 1.12.7 required")
     resolution=resolve_attempts(root)
     ep=validate_provenance(root,resolution.planpath,resolution.ledgerpath)
@@ -568,7 +568,7 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
         retained_primary=s.condition_id=="gaussian_0.10"&&!(s.world_seed in excluded_worlds))
         for s in resolution.slots if s.resolution=="behavioral_failure"]
 
-    out=joinpath(root,OUT); mkpath(out); figs=joinpath(out,"figures"); mkpath(figs)
+    out=String(output_dir); mkpath(out); figs=joinpath(out,"figures"); mkpath(figs)
     csvwrite(joinpath(out,"attempts.csv"),resolution.attempts,fieldnames(typeof(first(resolution.attempts)))|>x->String.(x))
     csvwrite(joinpath(out,"logical_slots.csv"),resolution.slots,String.(fieldnames(typeof(first(resolution.slots)))))
     csvwrite(joinpath(out,"terminal_infrastructure.csv"),filter(s->s.terminal_infrastructure,resolution.slots),
@@ -625,15 +625,14 @@ function analyze(root=normpath(joinpath(@__DIR__,"..")))
         run_scores_jsonl_sha256=ep.run_scores_jsonl_sha256,run_scores_csv_sha256=ep.run_scores_csv_sha256,
         bootstrap_seed=BOOTSTRAP_SEED,bootstrap_resamples=BOOTSTRAPS,analysis_timestamp_utc=string(Dates.now(Dates.UTC)))
     jsonwrite(joinpath(out,"analysis-provenance.json"),metadata)
-    write_findings(root, kept, excluded, effects, h1, h2, failure_rows, ops, policy_descriptive,clean_compare,worldrows,success_rows,terminal,behavioral_worlds)
+    write_findings(findings_path, kept, excluded, effects, h1, h2, failure_rows, ops, policy_descriptive,clean_compare,worldrows,success_rows,terminal,behavioral_worlds)
     println("primary matched worlds retained: $(length(kept)); excluded: $(length(excluded_worlds))")
     println("H1: $(h1 ? "supported" : "not supported"); H2: $(h2 ? "supported" : "not supported")")
     println("analysis outputs: $out")
     (out=out,kept=kept,excluded=excluded,effects=effects,H1=h1,H2=h2,operations=ops,failures=failure_rows)
 end
 
-function write_findings(root,kept,excluded,effects,h1,h2,failures,ops,descriptive,cleancompare,worlds,success,terminal,behavioral_worlds)
-    path=joinpath(root,"research","findings-v0.1.md")
+function write_findings(path,kept,excluded,effects,h1,h2,failures,ops,descriptive,cleancompare,worlds,success,terminal,behavioral_worlds)
     open(path,"w") do io
         println(io,"""# Falsify V0.1 Confirmatory Findings
 

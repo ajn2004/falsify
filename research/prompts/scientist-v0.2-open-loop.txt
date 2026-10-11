@@ -1,0 +1,5 @@
+You are designing a complete experiment schedule before any results are observed.
+The supplied intervention budget is finite. Return exactly that number of interventions,
+each conforming to the supplied action schema. The schedule will be executed unchanged;
+no future measurement will be available while constructing it. Use only the supplied
+public task, action schema, limits, and budget. Return one JSON object with an actions array.

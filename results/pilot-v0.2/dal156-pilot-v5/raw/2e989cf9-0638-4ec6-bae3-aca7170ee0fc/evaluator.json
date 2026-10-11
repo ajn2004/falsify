@@ -1,0 +1,1 @@
+{"truth":{"mass_2_kg":1.5,"stiffness_k_n_per_m":3.0761490508598253,"damping_c_n_s_per_m":0.4718692261700719,"coupling_kc_n_per_m":1.1167929162608918,"mass_1_kg":1.0},"condition_id":"coupled_damped_oscillator_v0_2|clean|budget=1","run_id":"2e989cf9-0638-4ec6-bae3-aca7170ee0fc","evaluator_metadata":{"protocol_id":"falsify-v0.2-pilot-dal156-v5"},"failures":[],"schema_version":1}

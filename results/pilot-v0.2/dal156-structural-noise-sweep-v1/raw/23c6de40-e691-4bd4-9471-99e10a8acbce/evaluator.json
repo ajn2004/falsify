@@ -1,0 +1,1 @@
+{"truth":{"omega0":1.3992852809920515,"model_class":"linear","zeta":0.255693293444543,"beta":0.0},"condition_id":"linear_vs_duffing_v0_2|gaussian_0.50|budget=8","run_id":"23c6de40-e691-4bd4-9471-99e10a8acbce","evaluator_metadata":{"protocol_id":"falsify-v0.2-pilot-dal156-structural-noise-sweep-v1"},"failures":[],"schema_version":1}
