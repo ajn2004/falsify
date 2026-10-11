@@ -416,17 +416,22 @@ include("environments/CoupledOscillator.jl")
 
 include("agents/ScientistPolicy.jl")
 using .ScientistPolicyAPI: AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
-      RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION,
-       GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION
+       RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
+       ScientistPolicy, OpenLoopScientistPolicy, OpenLoopScheduleRequest, model_request,
+         schedule_request, request, SCIENTIST_PROMPT, PROMPT_VERSION,
+        GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION, OPEN_LOOP_PROMPT_VERSION, OPEN_LOOP_PROMPT
 export AbstractModelClient, ModelRequest, ModelResponse, ModelMetadata,
        RequestLimits, RequestMeasurement, RequestObservation, RequestHistoryEntry,
-       ScientistPolicy, model_request, request, SCIENTIST_PROMPT, PROMPT_VERSION,
-       GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION
+        ScientistPolicy, OpenLoopScientistPolicy, OpenLoopScheduleRequest, model_request,
+         schedule_request, llm_policy, request, SCIENTIST_PROMPT, PROMPT_VERSION,
+        GENERIC_SCIENTIST_PROMPT, GENERIC_PROMPT_VERSION, OPEN_LOOP_PROMPT_VERSION, OPEN_LOOP_PROMPT
 import .ScientistPolicyAPI: next_decision
 policy_identity(::ScientistPolicy) = PolicyIdentity("scientist", version=PROMPT_VERSION)
-policy_identity(::ScientistPolicy, world::AbstractEnvironment) = PolicyIdentity("scientist",
-    version=policy_contract_profile(world))
+policy_identity(::ScientistPolicy, world::AbstractEnvironment) =
+    policy_contract_profile(world) == PROMPT_VERSION ? PolicyIdentity("scientist", version=PROMPT_VERSION) :
+        PolicyIdentity("scientist_adaptive", version=GENERIC_PROMPT_VERSION)
+policy_identity(::OpenLoopScientistPolicy) = PolicyIdentity("scientist_open_loop", version=OPEN_LOOP_PROMPT_VERSION)
+policy_identity(::OpenLoopScientistPolicy, ::AbstractEnvironment) = PolicyIdentity("scientist_open_loop", version=OPEN_LOOP_PROMPT_VERSION)
 _scientist_policy_configuration() = (; prompt_version=PROMPT_VERSION,
     generic_prompt_version=GENERIC_PROMPT_VERSION,
     prompt_selection="v0.1 compatibility schema uses frozen prompt; other schemas use generic prompt",
@@ -434,6 +439,14 @@ _scientist_policy_configuration() = (; prompt_version=PROMPT_VERSION,
     generic_prompt_sha256=bytes2hex(SHA.sha256(GENERIC_SCIENTIST_PROMPT)),
     provider_calls="injected_client")
 policy_configuration(::ScientistPolicy) = _scientist_policy_configuration()
+llm_policy(client::AbstractModelClient, treatment::Symbol) = treatment === :adaptive_llm ?
+    ScientistPolicy(client) : treatment === :open_loop_llm ? OpenLoopScientistPolicy(client) :
+    throw(ArgumentError("LLM treatment must be :adaptive_llm or :open_loop_llm"))
+llm_policy(client::AbstractModelClient, config::AbstractDict) =
+    llm_policy(client, Symbol(config["policy"]))
+policy_configuration(policy::OpenLoopScientistPolicy) = merge((policy_identity="scientist_open_loop",
+    prompt_version=OPEN_LOOP_PROMPT_VERSION, prompt_sha256=bytes2hex(SHA.sha256(OPEN_LOOP_PROMPT)),
+    provider_calls="one_schedule_generation_request"), policy_configuration(ScientistPolicy(policy.client)))
 
 include("protocol/RunController.jl")
 using .RunController: RunConfig, RunOutcome, RunAttempt, run_experiment, run_attempt,
@@ -452,4 +465,8 @@ export OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_c
 policy_configuration(policy::ScientistPolicy{<:OpenRouterClient}) = merge(
     _scientist_policy_configuration(),
     OpenRouterIntegration.policy_configuration(policy.client))
+policy_configuration(policy::OpenLoopScientistPolicy{<:OpenRouterClient}) = merge(
+    policy_configuration(ScientistPolicy(policy.client)), (policy_identity="scientist_open_loop",
+    prompt_version=OPEN_LOOP_PROMPT_VERSION, prompt_sha256=bytes2hex(SHA.sha256(OPEN_LOOP_PROMPT)),
+    provider_calls="one_schedule_generation_request"))
 end

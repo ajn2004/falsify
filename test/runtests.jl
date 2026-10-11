@@ -65,6 +65,107 @@ struct ContractProbeClient <: AbstractModelClient
 end
 Falsify.request(c::ContractProbeClient, req::ModelRequest) = (c.seen[] = req; ModelResponse(c.content))
 
+struct ScheduleProbeClient <: AbstractModelClient
+    content::String
+    requests::Vector{Any}
+end
+Falsify.request(c::ScheduleProbeClient, req::OpenLoopScheduleRequest) =
+    (push!(c.requests, req); ModelResponse(c.content; metadata=ModelMetadata(model="mock/model", input_tokens=11, output_tokens=7, cost=0.02)))
+
+@testset "DAL-154 open-loop schedule control" begin
+    action_json = "{\"initial_displacement_m\":0.2,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}"
+    second_action_json = "{\"initial_displacement_m\":0.7,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}"
+    content = "{\"actions\":[$action_json,$second_action_json]}"
+    client = ScheduleProbeClient(content, Any[])
+    policy = OpenLoopScientistPolicy(client)
+    world = generate_world(912)
+    out = run_experiment(world, policy, RunConfig(2))
+    @test out.public.status == "completed"
+    @test out.public.policy_identity.name == "scientist_open_loop"
+    @test out.public.policy_identity.version == OPEN_LOOP_PROMPT_VERSION
+    @test length(client.requests) == 1
+    @test client.requests[1].intervention_budget == 2
+    @test !(:history in fieldnames(typeof(client.requests[1])))
+    @test !occursin("history", JSON3.write(client.requests[1]))
+    @test !occursin("observations", JSON3.write(client.requests[1]))
+    ol_cfg = OpenRouterConfig(model="mock/model", provider_order=["mock"], prompt_version=GENERIC_PROMPT_VERSION)
+    ol_payload = Falsify.OpenRouterIntegration.openrouter_payload(ol_cfg, client.requests[1])
+    ol_user = JSON3.read(ol_payload["messages"][2].content)
+    @test Set(Symbol.(keys(ol_user))) == Set((:task_description, :action_limits, :intervention_budget, :action_schema))
+    ol_schema = ol_payload["response_format"]["json_schema"]["schema"]["properties"]["actions"]
+    @test ol_schema["minItems"] == ol_schema["maxItems"] == 2
+
+    # Exercise the real provider dispatch and transport with a mocked HTTP 200.
+    transport_calls = Ref(0)
+    transport = (url, headers, body) -> begin
+        transport_calls[] += 1
+        @test url == "https://openrouter.ai/api/v1/chat/completions"
+        payload = JSON3.read(body)
+        @test payload["response_format"]["json_schema"]["name"] == "experiment_schedule"
+        (; status=200, body="""{"id":"req-schedule","model":"mock/served","choices":[{"message":{"content":$(JSON3.write(content))},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":7,"cost":0.02}}""")
+    end
+    real_client = OpenRouterClient(ol_cfg; transport, key_getter=() -> "test-key")
+    real_out = run_experiment(world, OpenLoopScientistPolicy(real_client), RunConfig(2))
+    @test real_out.public.status == "completed"
+    @test transport_calls[] == 1
+    @test real_out.public.events[1].operational_metadata.request_id == "req-schedule"
+    @test real_out.public.events[1].operational_metadata.model == "mock/served"
+    @test real_out.public.events[1].operational_metadata.cost == 0.02
+
+    pilot_config = TOML.parsefile(joinpath(@__DIR__, "..", "configs", "v0.2-pilot.example.toml"))
+    @test llm_policy(real_client, merge(copy(pilot_config), Dict("policy"=>"adaptive_llm"))) isa ScientistPolicy
+    @test llm_policy(real_client, merge(copy(pilot_config), Dict("policy"=>"open_loop_llm"))) isa OpenLoopScientistPolicy
+    @test out.public.events[1].operational_metadata.cost == 0.02
+    @test out.public.events[2].operational_metadata === nothing
+    @test out.public.events[1].requested_action.initial_displacement_m == 0.2
+    @test out.public.events[2].requested_action.initial_displacement_m == 0.7
+    @test_throws PolicyFailure Falsify.decision_with_parser(policy,
+        PublicState(policy_task(public_task(world)), limits_for(public_task(world)), (), 2;
+            action_schema=action_schema(world), policy_contract_profile=Falsify.policy_contract_profile(world)),
+        text -> parse_action(typeof(world), text))
+
+    adaptive_seen = Ref{Union{Nothing,ModelRequest}}(nothing)
+    adaptive_client = ContractProbeClient("{\"control_value\":0.6}", adaptive_seen)
+    adaptive_world = generate_coupled_world(9)
+    @test policy_identity(ScientistPolicy(adaptive_client), adaptive_world).name == "scientist_adaptive"
+    @test policy_identity(ScientistPolicy(adaptive_client), adaptive_world).version == GENERIC_PROMPT_VERSION
+    coupled_adaptive_json = "{\"x1_initial_m\":0.2,\"x2_initial_m\":0.0,\"v1_initial_m_per_s\":0.0,\"v2_initial_m_per_s\":0.0,\"drive_force_n\":0.0,\"drive_frequency_hz\":0.0}"
+    adaptive_coupled_client = ScheduleProbeClient("{\"actions\":[]}", Any[])
+    adaptive_out = run_experiment(adaptive_world, ScientistPolicy(
+        ContractProbeClient(coupled_adaptive_json, Ref{Union{Nothing,ModelRequest}}(nothing))), RunConfig(1))
+    @test adaptive_out.public.status == "completed"
+    @test adaptive_out.public.policy_identity.name == "scientist_adaptive"
+    @test adaptive_out.public.events[1].observation.x2_m isa Tuple
+    @test OPEN_LOOP_PROMPT_VERSION != GENERIC_PROMPT_VERSION
+
+    bad = OpenLoopScientistPolicy(ScheduleProbeClient("{\"actions\":[]}", Any[]))
+    failed = run_experiment(world, bad, RunConfig(2))
+    @test failed.public.terminal.failure.code == "wrong_schedule_length"
+    @test classify_run(failed.public.status, failed.public.terminal.failure.code) == "behavioral_failure"
+
+    probe = ContractProbeEnvironment(0.3, 929)
+    bad_then_good = "{\"actions\":[{\"control_value\":1.2},{\"control_value\":0.5}]}"
+    exhausted = run_experiment(probe, OpenLoopScientistPolicy(ScheduleProbeClient(bad_then_good, Any[])),
+        RunConfig(2; retry_allowance=2))
+    @test exhausted.public.events[1].requested_action.control_value == 1.2
+    @test exhausted.public.events[1].validation_code == "out_of_bounds"
+    @test exhausted.public.events[2].requested_action.control_value == 0.5
+    @test exhausted.public.terminal.failure.code == "open_loop_schedule_exhausted"
+    @test classify_run(exhausted.public.status, exhausted.public.terminal.failure.code) == "behavioral_failure"
+
+    # The schema-driven schedule parser composes with each apparatus parser.
+    coupled = generate_coupled_world(29)
+    coupled_action = "{\"x1_initial_m\":0.2,\"x2_initial_m\":0.0,\"v1_initial_m_per_s\":0.0,\"v2_initial_m_per_s\":0.0,\"drive_force_n\":0.0,\"drive_frequency_hz\":0.0}"
+    c_out = run_experiment(coupled, OpenLoopScientistPolicy(ScheduleProbeClient("{\"actions\":[$coupled_action,$coupled_action]}", Any[])), RunConfig(2))
+    @test c_out.public.status == "completed"
+    @test length(c_out.public.events[1].observation.x1_m) == 101
+    duffing = first(filter(w -> w.truth.model_class == Falsify.linear, [generate_duffing_world(i) for i in 1:5]))
+    d_content = "{\"actions\":[$action_json,$second_action_json]}"
+    d_out = run_experiment(duffing, OpenLoopScientistPolicy(ScheduleProbeClient(d_content, Any[])), RunConfig(2))
+    @test d_out.public.status == "completed"
+    @test d_out.public.policy_identity.version == OPEN_LOOP_PROMPT_VERSION
+end
+
 @testset "DAL-150 generic environment contract" begin
     probe = ContractProbeEnvironment(0.314159, 918273)
     seen = Ref{Union{Nothing,ModelRequest}}(nothing)
