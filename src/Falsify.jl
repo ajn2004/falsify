@@ -458,6 +458,9 @@ include("evaluation/SystemIdentification.jl")
 include("evaluation/Metrics.jl")
 using .Metrics: RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
 export RunMetrics, MetricConfig, HELDOUT_PROBES, score_run
+include("evaluation/V02Evaluation.jl")
+using .V02Evaluation: V02EvaluatorConfig, V02RunMetrics, score_v0_2_run, config_hash
+export V02EvaluatorConfig, V02RunMetrics, score_v0_2_run, config_hash
 
 include("providers/OpenRouterClient.jl")
 using .OpenRouterIntegration: OpenRouterClient, OpenRouterConfig, openrouter_payload, load_openrouter_config

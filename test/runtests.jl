@@ -352,6 +352,84 @@ end
     @test typeof(left.events[1].observation) == typeof(right.events[1].observation)
 end
 
+@testset "DAL-153 persisted V0.2 evaluator" begin
+    cfg=V02EvaluatorConfig(grid_points=3,max_iterations=80,coupled_forced_probe=(0.,0.,0.,0.,0.5,0.7))
+    mktempdir() do root
+        cw=CoupledOscillatorWorld(CoupledTruth(2.7,1.1,0.4),CoupledMetadata("Tsit5",1e-9,1e-11,10.,101,7,COUPLED_ENVIRONMENT_VERSION,1.,1.5))
+        co=run_experiment(cw,FixedDesignPolicy(),RunConfig(4))
+        cpath=write_run(root,co.public,co.provenance,co.evaluator)
+        # The scoring call receives only records reloaded from disk.
+        cm=score_v0_2_run(load_run(cpath),cfg)
+        @test cm.fit_status=="success"
+        @test cm.parameter_error < 0.02
+        @test isfinite(cm.heldout_rmse_m)
+        malformed=load_run(cpath)
+        empty_public=JSON3.read(JSON3.write(malformed.public),Dict{String,Any}); empty_public["events"]=Any[]
+        insufficient=score_v0_2_run(merge(malformed,(public=JSON3.read(JSON3.write(empty_public)),)),cfg)
+        @test insufficient.run_class=="apparatus_failure"
+        @test insufficient.fit_status!="success"
+
+        infra_public=JSON3.read(JSON3.write(malformed.public),Dict{String,Any}); infra_public["status"]="failed"
+        infra_public["terminal"]["failure"]=Dict("code"=>"provider_unavailable")
+        infra=merge(malformed,(public=JSON3.read(JSON3.write(infra_public)),))
+        excluded=score_v0_2_run(infra,cfg)
+        @test excluded.run_class=="infrastructure"
+        @test ismissing(excluded.parameter_error)
+        aborted_public=copy(infra_public); aborted_public["status"]="aborted"
+        aborted=score_v0_2_run(merge(malformed,(public=JSON3.read(JSON3.write(aborted_public)),)),cfg)
+        @test aborted.run_class=="apparatus_failure"
+        @test ismissing(aborted.parameter_error)
+        behavior_public=copy(infra_public); behavior_public["terminal"]=copy(infra_public["terminal"])
+        behavior_public["terminal"]["failure"]=Dict("code"=>"invalid_action")
+        behavior=merge(malformed,(public=JSON3.read(JSON3.write(behavior_public)),))
+        penalized=score_v0_2_run(behavior,cfg)
+        @test penalized.run_class=="behavioral_failure"
+        @test penalized.parameter_error==cfg.failure_penalty
+
+        action(x)="{\"initial_displacement_m\":$x,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}"
+        schedule="{\"actions\":[$(action(1.5)),$(action(1.0)),$(action(0.5)),$(action(0.2))]}"
+        high_delta=Ref(0.0)
+        for (label,klass,beta,expected) in (("linear",Falsify.linear,0.0,"linear"),("duffing",Falsify.duffing,0.5,"duffing"))
+            w=DuffingWorld(DuffingTruth(klass,0.15,1.3,beta),OscillatorConfig(),DuffingMetadata("Tsit5",1e-9,1e-11,9,v"0.0.0"))
+            out=run_experiment(w,OpenLoopScientistPolicy(ScheduleProbeClient(schedule,Any[])),RunConfig(4))
+            path=write_run(root,out.public,out.provenance,out.evaluator)
+            metric=score_v0_2_run(load_run(path),cfg)
+            @test metric.linear_fit_status==metric.duffing_fit_status=="success"
+            @test metric.selected_class==expected
+            @test metric.class_correct===true
+            @test isfinite(metric.selected_prediction_rmse_m)
+            @test isfinite(metric.heldout_normalized_error)
+            @test isfinite(metric.true_model_prediction_rmse_m)
+            label=="duffing" && (high_delta[]=abs(metric.delta_per_sample))
+            if label=="linear"
+                # A persisted linear dataset evaluated against Duffing truth exercises visible wrong-class scoring.
+                linear_artifact=load_run(path)
+                wrong_truth=JSON3.read(JSON3.write(linear_artifact.evaluator),Dict{String,Any})
+                wrong_truth["truth"]["model_class"]="duffing"
+                wrong=score_v0_2_run(merge(linear_artifact,(evaluator=JSON3.read(JSON3.write(wrong_truth)),)),cfg)
+                @test wrong.class_correct===false
+                @test isfinite(wrong.selected_prediction_rmse_m)
+                @test ismissing(wrong.parameter_error)
+            end
+            if label=="linear"
+                failed_public=JSON3.read(JSON3.write(load_run(path).public),Dict{String,Any})
+                failed_public["status"]="failed"
+                failed_public["terminal"]["failure"]=Dict("code"=>"invalid_action")
+                failed_class=score_v0_2_run(merge(load_run(path),(public=JSON3.read(JSON3.write(failed_public)),)),cfg)
+                @test failed_class.class_correct===false
+                @test failed_class.true_class=="linear"
+            end
+        end
+        low_schedule="{\"actions\":[$(action(0.2)),$(action(0.15)),$(action(0.1)),$(action(0.05))]}"
+        low_world=DuffingWorld(DuffingTruth(Falsify.duffing,0.15,1.3,0.5),OscillatorConfig(),DuffingMetadata("Tsit5",1e-9,1e-11,10,v"0.0.0"))
+        low_out=run_experiment(low_world,OpenLoopScientistPolicy(ScheduleProbeClient(low_schedule,Any[])),RunConfig(4))
+        low_path=write_run(root,low_out.public,low_out.provenance,low_out.evaluator)
+        low_metric=score_v0_2_run(load_run(low_path),cfg)
+        @test abs(low_metric.delta_per_sample)<high_delta[]
+        @test config_hash(cfg)==config_hash(cfg)
+    end
+end
+
 @testset "DAL-155 reliability report reconciliation" begin
     R = ReliabilityReportV02
     root = normpath(joinpath(@__DIR__, ".."))
