@@ -90,6 +90,7 @@ end
 struct PublicRunArtifact
     run_id::String
     experiment_version::String
+    protocol_id::Union{Nothing,String}
     environment_id::Union{Nothing,String}
     environment_version::Union{Nothing,String}
     action_schema_version::Union{Nothing,String}
@@ -104,14 +105,15 @@ struct PublicRunArtifact
     policy_identity::PolicyIdentity
     events::Tuple{Vararg{RunEvent}}
     terminal::Union{Nothing,TerminalResult}
-    function PublicRunArtifact(; run_id=new_run_id(), experiment_version="v0", environment_id=nothing,
+    function PublicRunArtifact(; run_id=new_run_id(), experiment_version="v0", protocol_id=nothing, environment_id=nothing,
             environment_version=nothing, action_schema_version=nothing, observation_schema_version=nothing,
             created_at=string(now(UTC)), finalized_at=nothing, status="running",
             task_description, action_limits, intervention_budget, protocol_settings,
             policy_identity, events=(), terminal=nothing)
         _validate_run_id(run_id); status in STATUSES || throw(ArgumentError("unsupported run status"))
         intervention_budget >= 0 || throw(ArgumentError("budget must be nonnegative"))
-        new(String(run_id), String(experiment_version), environment_id === nothing ? nothing : String(environment_id),
+        new(String(run_id), String(experiment_version), protocol_id === nothing ? nothing : String(protocol_id),
+            environment_id === nothing ? nothing : String(environment_id),
             environment_version === nothing ? nothing : String(environment_version),
             action_schema_version === nothing ? nothing : String(action_schema_version),
             observation_schema_version === nothing ? nothing : String(observation_schema_version),
@@ -249,13 +251,15 @@ _terminal(t) = t === nothing ? nothing : Dict("status"=>t.status, "final_output"
     "decision_opportunities_used"=>t.decision_opportunities_used, "invalid_action_count"=>t.invalid_action_count)
 
 function _public(a)
-    Dict("schema_version"=>SCHEMA_VERSION, "run_id"=>a.run_id, "experiment_version"=>a.experiment_version,
+    d=Dict("schema_version"=>SCHEMA_VERSION, "run_id"=>a.run_id, "experiment_version"=>a.experiment_version,
         "environment_id"=>a.environment_id, "environment_version"=>a.environment_version,
         "action_schema_version"=>a.action_schema_version, "observation_schema_version"=>a.observation_schema_version,
         "created_at"=>a.created_at, "finalized_at"=>a.finalized_at, "status"=>a.status,
         "task_description"=>a.task_description, "action_limits"=>_dict(a.action_limits),
         "intervention_budget"=>a.intervention_budget, "protocol_settings"=>_dict(a.protocol_settings),
         "policy_identity"=>_dict(a.policy_identity), "events"=>_event.(a.events), "terminal"=>_terminal(a.terminal))
+    a.protocol_id === nothing || (d["protocol_id"]=a.protocol_id)
+    d
 end
 _provenance(p) = Dict("schema_version"=>p.schema_version, "run_id"=>p.run_id,
     "git_commit"=>p.git_commit, "dirty_working_tree"=>p.dirty_working_tree,

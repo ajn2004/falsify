@@ -1,0 +1,2 @@
+{"event":"attempt_started","run_id":"c8e6a0f3-a0af-4538-ac71-ee94467ab4c8","slot_id":"coupled_damped_oscillator_v0_2|seed=9560101|noise=clean|policy=random","policy":"random","condition_id":"coupled_damped_oscillator_v0_2|clean","repetition_id":"pilot-1","environment":"coupled_damped_oscillator_v0_2","noise_condition":"clean","world_seed":9560101,"noise_seed":0}
+{"event":"attempt_finished","run_id":"c8e6a0f3-a0af-4538-ac71-ee94467ab4c8","slot_id":"coupled_damped_oscillator_v0_2|seed=9560101|noise=clean|policy=random","classification":"completed","policy":"random"}

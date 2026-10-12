@@ -1,0 +1,1 @@
+{"truth":{"omega0":1.4587106616236407,"model_class":"duffing","zeta":0.11731762788485561,"beta":0.3212661095126769},"condition_id":"linear_vs_duffing_v0_2|clean|budget=8","run_id":"58bf0baf-1dea-4673-8bf0-450e2c3024bb","evaluator_metadata":{"protocol_id":"falsify-v0.2-pilot-dal156-structural-budget-sweep-v1"},"failures":[],"schema_version":1}

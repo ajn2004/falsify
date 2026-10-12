@@ -4,6 +4,7 @@ using TOML
 using Test
 using UUIDs
 using Random
+using SHA
 
 struct ContractProbeEnvironment <: Falsify.AbstractEnvironment
     truth::Float64
@@ -58,10 +59,118 @@ include(joinpath(@__DIR__, "..", "scripts", "ConfirmatoryV01.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "materialize_confirmatory_scores_v0_1.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "analyze_confirmatory_v0_1.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "reliability_report_v0_2.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "V02Lock.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "V02SeedAudit.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "V02EvaluatorConfig.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "V02PilotProtocol.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "run_confirmatory_v0_2.jl"))
 
 struct ContractProbeClient <: AbstractModelClient
     content::String
     seen::Base.RefValue{Union{Nothing,ModelRequest}}
+end
+
+@testset "DAL-156 confirmatory protocol lock validation" begin
+    @test V02SeedAudit.assert_disjoint_world_seeds([1,2],[3,4])
+    @test_throws ErrorException V02SeedAudit.assert_disjoint_world_seeds([1,2],[2,3])
+    root=normpath(joinpath(@__DIR__,".."))
+    pilot_evaluator=V02EvaluatorConfigFile.load_config(joinpath(root,"configs","v0.2-evaluator-pilot-v2.json"))
+    @test pilot_evaluator.version=="v0.2-evaluator-pilot-v2"
+    @test pilot_evaluator.coupled_forced_probe==(0.0,0.0,0.0,0.0,0.5,0.25)
+    @test pilot_evaluator.grid_points==5 && pilot_evaluator.max_iterations==120
+    @test V02PilotProtocol.retry_infrastructure_attempt("infrastructure",1,1,0)
+    @test !V02PilotProtocol.retry_infrastructure_attempt("infrastructure",1,1,1)
+    @test !V02PilotProtocol.retry_infrastructure_attempt("behavioral_failure",1,1,0)
+    @test !V02PilotProtocol.retry_infrastructure_attempt("apparatus_failure",1,1,0)
+    @test !V02PilotProtocol.retry_infrastructure_attempt("infrastructure",2,1,0)
+    protocol="falsify-v0.2-prereg-1"
+    mktempdir() do root
+        execution=JSON3.write((protocol_id=protocol,
+            artifact_namespace="results/confirmatory-v0.2-synthetic",
+            seed_manifest="seeds.json",evaluator_config="evaluator.json",
+            provider_config="provider.json",analysis_config="analysis.json",
+            environments=[(id="coupled_damped_oscillator_v0_2",version="v0.2-coupled-1"),(id="linear_vs_duffing_v0_2",version="2")],
+            policies=[(name="random",version="v0"),(name="fixed_design",version="v0"),
+                (name="scientist_adaptive",version="scientist-v0-2-schema-driven-v1"),
+                (name="scientist_open_loop",version="scientist-v0-2-open-loop-v1")],
+            intervention_budget=3,noise_conditions=[(condition="clean",sigma_m=0.0),(condition="gaussian_candidate",sigma_m=0.03)],
+            prompts=(adaptive_prompt=(version=GENERIC_PROMPT_VERSION,sha256=bytes2hex(sha256(GENERIC_SCIENTIST_PROMPT))),
+                open_loop_prompt=(version=OPEN_LOOP_PROMPT_VERSION,sha256=bytes2hex(sha256(OPEN_LOOP_PROMPT))))))
+        seeds=JSON3.write((slots=[(slot_id="confirm-a",block_id="confirm-block",repetition_id="rep-1",
+            policy="random",world_seed=112,noise_seed=212,policy_seed=312)],))
+        files=Dict("execution.json"=>execution,
+            "seeds.json"=>seeds,"evaluator.json"=>"{}","provider.json"=>"{}",
+            "analysis.json"=>"{}","adaptive-prompt.txt"=>GENERIC_SCIENTIST_PROMPT,"open-loop-prompt.txt"=>OPEN_LOOP_PROMPT,
+            "prereg.md"=>"Synthetic fixture for $protocol","Manifest.toml"=>"manifest",
+            "src/Falsify.jl"=>"source","src/environments/CoupledOscillator.jl"=>"source",
+            "src/environments/DuffingEnvironment.jl"=>"source","src/agents/ScientistPolicy.jl"=>"source",
+            "src/baselines/RandomPolicy.jl"=>"source","src/baselines/FixedDesignPolicy.jl"=>"source",
+            "src/protocol/RunController.jl"=>"source","src/providers/OpenRouterClient.jl"=>"source",
+            "src/evaluation/V02Evaluation.jl"=>"source","scripts/run_confirmatory_v0_2.jl"=>"source","scripts/V02Lock.jl"=>"source")
+        for (p,txt) in files; mkpath(dirname(joinpath(root,p)));write(joinpath(root,p),txt); end
+        pilotroot=joinpath(root,"results","pilot-v0.2","partial-v1");mkpath(pilotroot)
+        write(joinpath(pilotroot,"execution-plan.json"),JSON3.write((slots=[(slot_id="pilot-a",world_seed=111,noise_seed=211,policy_seed=311)],)))
+        make_lock()=Dict("schema_version"=>1,"protocol_id"=>protocol,"execution_config"=>"execution.json",
+            "files"=>[Dict("path"=>p,"sha256"=>V02ProtocolLock.hashfile(joinpath(root,p))) for p in sort(collect(keys(files)))],
+            "source_files"=>[p for p in keys(files) if startswith(p,"src/")||startswith(p,"scripts/")],
+            "roles"=>Dict("preregistration"=>"prereg.md","seed_manifest"=>"seeds.json","execution_config"=>"execution.json",
+                "evaluator_config"=>"evaluator.json","analysis_config"=>"analysis.json","provider_config"=>"provider.json",
+                "adaptive_prompt"=>"adaptive-prompt.txt","open_loop_prompt"=>"open-loop-prompt.txt","manifest"=>"Manifest.toml"),
+            "prompt_hashes"=>Dict("adaptive_prompt"=>V02ProtocolLock.hashfile(joinpath(root,"adaptive-prompt.txt")),
+                "open_loop_prompt"=>V02ProtocolLock.hashfile(joinpath(root,"open-loop-prompt.txt"))))
+        lockpath=joinpath(root,"lock.json")
+        save_lock(l)=write(lockpath,JSON3.write(l))
+        save_lock(make_lock())
+        valid_lock=V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol)
+        @test valid_lock.checked_files==length(files)
+        @test valid_lock.seed_audit.pilot_worlds==1
+        @test ConfirmatoryRunnerV02.validate_before_start(lockpath;root).checked_files==length(files)
+        @test V02SeedAudit.canonical_slots([(slot_id="z",),(slot_id="a",)])==[(slot_id="a",),(slot_id="z",)]
+        for (key,value) in (("world_seed",111),("noise_seed",211),("policy_seed",311))
+            bad_manifest=JSON3.write((slots=[Dict("slot_id"=>"overlap","block_id"=>"b","repetition_id"=>"r",
+                "policy"=>"random","world_seed"=>112,"noise_seed"=>212,"policy_seed"=>312,key=>value)],))
+            write(joinpath(root,"seeds.json"),bad_manifest)
+            @test_throws ErrorException V02SeedAudit.audit_manifest(joinpath(root,"seeds.json");repo_root=root)
+        end
+        write(joinpath(root,"seeds.json"),seeds)
+        incomplete=make_lock();filter!(e->e["path"]!="src/environments/DuffingEnvironment.jl",incomplete["files"]);save_lock(incomplete)
+        @test_throws ErrorException V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol)
+        save_lock(make_lock())
+        function rejects_file(name,content)
+            old=read(joinpath(root,name),String); write(joinpath(root,name),content)
+            ok=try V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol); true catch; false end
+            runner_ok=try ConfirmatoryRunnerV02.validate_before_start(lockpath;root); true catch; false end
+            write(joinpath(root,name),old); save_lock(make_lock()); !ok&&!runner_ok
+        end
+        for name in ("evaluator.json","seeds.json","provider.json","analysis.json","adaptive-prompt.txt","open-loop-prompt.txt")
+            @test rejects_file(name,"modified")
+        end
+        lock=make_lock();lock["protocol_id"]="other";save_lock(lock)
+        @test_throws ErrorException V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol)
+        @test_throws ErrorException ConfirmatoryRunnerV02.validate_before_start(lockpath;root)
+        function rejects_execution(change)
+            old=read(joinpath(root,"execution.json"),String); d=JSON3.read(old,Dict{String,Any}); change(d)
+            write(joinpath(root,"execution.json"),JSON3.write(d))
+            ok=try V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol); true catch; false end
+            runner_ok=try ConfirmatoryRunnerV02.validate_before_start(lockpath;root); true catch; false end
+            write(joinpath(root,"execution.json"),old);save_lock(make_lock());!ok&&!runner_ok
+        end
+        function rejects_rehashed_execution(change)
+            old=read(joinpath(root,"execution.json"),String); d=JSON3.read(old,Dict{String,Any}); change(d)
+            write(joinpath(root,"execution.json"),JSON3.write(d));save_lock(make_lock())
+            ok=try V02ProtocolLock.validate_lock(lockpath;root,expected_protocol=protocol); true catch; false end
+            runner_ok=try ConfirmatoryRunnerV02.validate_before_start(lockpath;root); true catch; false end
+            write(joinpath(root,"execution.json"),old);save_lock(make_lock());!ok&&!runner_ok
+        end
+        @test rejects_rehashed_execution(d->(d["environments"][1]["version"]="wrong"))
+        @test rejects_rehashed_execution(d->(d["environments"][2]["version"]="1"))
+        @test rejects_rehashed_execution(d->(d["policies"][3]["version"]="wrong"))
+        @test rejects_execution(d->(d["intervention_budget"]=7))
+        @test rejects_execution(d->(d["noise_conditions"][2]["sigma_m"]=0.2))
+        write(joinpath(root,"seeds.json"),JSON3.write((slots=[(slot_id="overlap",block_id="b",repetition_id="r",
+            policy="random",world_seed=111,noise_seed=212,policy_seed=312)],)))
+        @test_throws ErrorException V02SeedAudit.audit_manifest(joinpath(root,"seeds.json");repo_root=root)
+    end
 end
 Falsify.request(c::ContractProbeClient, req::ModelRequest) = (c.seen[] = req; ModelResponse(c.content))
 
@@ -160,7 +269,8 @@ Falsify.request(c::ScheduleProbeClient, req::OpenLoopScheduleRequest) =
     @test c_out.public.status == "completed"
     @test length(c_out.public.events[1].observation.x1_m) == 101
     duffing = first(filter(w -> w.truth.model_class == Falsify.linear, [generate_duffing_world(i) for i in 1:5]))
-    d_content = "{\"actions\":[$action_json,$second_action_json]}"
+    duffing_second_action_json = "{\"initial_displacement_m\":0.4,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}"
+    d_content = "{\"actions\":[$action_json,$duffing_second_action_json]}"
     d_out = run_experiment(duffing, OpenLoopScientistPolicy(ScheduleProbeClient(d_content, Any[])), RunConfig(2))
     @test d_out.public.status == "completed"
     @test d_out.public.policy_identity.version == OPEN_LOOP_PROMPT_VERSION
@@ -176,6 +286,10 @@ end
     @test out.public.policy_identity.version == GENERIC_PROMPT_VERSION
     @test out.public.observation_schema_version == "1"
     @test out.public.events[1].requested_action isa ContractProbeAction
+    pilot_out=run_experiment(probe,ScientistPolicy(ContractProbeClient("{\"control_value\":0.6}",Ref{Union{Nothing,ModelRequest}}(nothing))),RunConfig(1);protocol_id="pilot-test-v1")
+    @test pilot_out.public.protocol_id=="pilot-test-v1"
+    @test pilot_out.evaluator.evaluator_metadata.protocol_id=="pilot-test-v1"
+    @test pilot_out.provenance.configuration.protocol_id=="pilot-test-v1"
     observation = out.public.events[1].observation
     @test observation isa ContractProbeObservation
     @test observation.measurement_a == (0.6, 0.6)
@@ -259,27 +373,59 @@ end
     @test any(w -> w.truth.model_class == Falsify.linear, worlds)
     @test any(w -> w.truth.model_class == Falsify.duffing, worlds)
     @test generate_duffing_world(42).truth == generate_duffing_world(42).truth
+    @test environment_version(generate_duffing_world(42)) == "2"
+    v3_seed_world=generate_duffing_world(42;version="3")
+    @test v3_seed_world.truth == generate_duffing_world(42).truth
+    @test environment_version(v3_seed_world) == "3"
     @test generate_duffing_world(42).truth.beta == (generate_duffing_world(42).truth.model_class == Falsify.linear ? 0.0 : generate_duffing_world(42).truth.beta)
     @test all(w -> DUFFING_ZETA_RANGE[1] <= w.truth.zeta <= DUFFING_ZETA_RANGE[2] &&
         DUFFING_OMEGA_RANGE[1] <= w.truth.omega0 <= DUFFING_OMEGA_RANGE[2] &&
         (w.truth.model_class == Falsify.linear ? w.truth.beta == 0.0 : DUFFING_BETA_RANGE[1] <= w.truth.beta <= DUFFING_BETA_RANGE[2]), worlds)
 
     @test action_schema(first(filter(w -> w.truth.model_class == Falsify.duffing, worlds))) == Falsify.legacy_action_schema()
+    old_world = generate_world(4101)
+    old_limits = limits_for(public_task(old_world))
+    @test old_limits.displacement_m == (-2.0, 2.0)
+    @test old_limits.velocity_m_per_s == (-2.0, 2.0)
+    @test old_limits.drive_acceleration_m_per_s2 == (-1.0, 1.0)
+    @test old_limits.drive_frequency_hz == (0.0, 3.0)
+    @test validate_environment_action(old_world, ExperimentAction(initial_displacement_m=2.0,initial_velocity_m_per_s=-2.0)).valid
+    @test !validate_environment_action(old_world, ExperimentAction(initial_displacement_m=2.01)).valid
     linear_world = DuffingWorld(DuffingTruth(Falsify.linear, 0.15, 1.3, 0.0), OscillatorConfig(),
         DuffingMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0"))
     duffing_world = DuffingWorld(DuffingTruth(Falsify.duffing, 0.15, 1.3, 0.5), OscillatorConfig(),
         DuffingMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0"))
-    low = ExperimentAction(initial_displacement_m=0.2)
-    high = ExperimentAction(initial_displacement_m=1.5)
+    low = ExperimentAction(initial_displacement_m=0.1)
+    high = ExperimentAction(initial_displacement_m=0.5)
+    @test environment_version(linear_world) == environment_version(duffing_world) == "2"
+    @test limits_for(public_task(duffing_world)).displacement_m == (-0.5,0.5)
+    @test limits_for(public_task(duffing_world)).velocity_m_per_s == (-0.5,0.5)
+    @test !validate_environment_action(linear_world,ExperimentAction(initial_displacement_m=0.51)).valid
+    @test !validate_environment_action(duffing_world,ExperimentAction(initial_velocity_m_per_s=-0.51)).valid
+    @test validate_environment_action(linear_world,ExperimentAction(initial_displacement_m=0.5)).valid
+    @test validate_environment_action(duffing_world,ExperimentAction(initial_displacement_m=0.5)).valid
+    v3_world=generate_duffing_world(4203;version="3")
+    v3_limits=limits_for(public_task(v3_world))
+    @test v3_limits.displacement_m == (-0.5,0.5)
+    @test v3_limits.velocity_m_per_s == (-0.5,0.5)
+    @test v3_limits.drive_acceleration_m_per_s2 == (-0.5,0.5)
+    @test v3_limits.drive_frequency_hz == (0.0,3.0)
+    @test validate_environment_action(v3_world,ExperimentAction(initial_displacement_m=0.5,
+        drive_acceleration_m_per_s2=0.5,drive_frequency_hz=0.2)).valid
+    @test !validate_environment_action(v3_world,ExperimentAction(initial_displacement_m=0.0,
+        drive_acceleration_m_per_s2=0.500001,drive_frequency_hz=0.2)).valid
+    @test validate_environment_action(duffing_world,ExperimentAction(initial_displacement_m=0.0,
+        drive_acceleration_m_per_s2=1.0,drive_frequency_hz=0.2)).valid
+    @test occursin("[-0.5,0.5]",public_task(v3_world).model_description)
     distance(world_a, world_b, action) = sqrt(sum(abs2, duffing_observe(world_a, action).displacement .-
         duffing_observe(world_b, action).displacement) / 101)
     @test distance(linear_world, duffing_world, high) > 20distance(linear_world, duffing_world, low)
     exact = duffing_observe(linear_world, high)
     reference = observe(Falsify.OscillatorWorld(Falsify.OscillatorTruth(0.15, 1.3), OscillatorConfig(),
         Falsify.OscillatorMetadata("Tsit5", 1e-9, 1e-11, 1, v"0.0.0")),
-        OscillatorExperiment(initial_displacement=1.5))
+        OscillatorExperiment(initial_displacement=0.5))
     @test exact.displacement ≈ reference.displacement atol=1e-9
-    bad_action = ExperimentAction(drive_frequency_hz=0.8)
+    bad_action = ExperimentAction(initial_displacement_m=0.0,drive_frequency_hz=0.8)
     @test validate_environment_action(linear_world, bad_action).code == :invalid_drive
     @test validate_environment_action(duffing_world, bad_action).code == :invalid_drive
     clean_trace = duffing_observe(duffing_world, low)
@@ -387,7 +533,7 @@ end
         @test penalized.parameter_error==cfg.failure_penalty
 
         action(x)="{\"initial_displacement_m\":$x,\"initial_velocity_m_per_s\":0.0,\"drive_acceleration_m_per_s2\":0.0,\"drive_frequency_hz\":0.0}"
-        schedule="{\"actions\":[$(action(1.5)),$(action(1.0)),$(action(0.5)),$(action(0.2))]}"
+        schedule="{\"actions\":[$(action(0.5)),$(action(0.4)),$(action(0.3)),$(action(0.2))]}"
         high_delta=Ref(0.0)
         for (label,klass,beta,expected) in (("linear",Falsify.linear,0.0,"linear"),("duffing",Falsify.duffing,0.5,"duffing"))
             w=DuffingWorld(DuffingTruth(klass,0.15,1.3,beta),OscillatorConfig(),DuffingMetadata("Tsit5",1e-9,1e-11,9,v"0.0.0"))
@@ -426,6 +572,40 @@ end
         low_path=write_run(root,low_out.public,low_out.provenance,low_out.evaluator)
         low_metric=score_v0_2_run(load_run(low_path),cfg)
         @test abs(low_metric.delta_per_sample)<high_delta[]
+        v2_probe_cfg=V02EvaluatorConfig(grid_points=3,max_iterations=80,
+            structural_probes=((0.1,0.0,0.0,0.0),))
+        v2_probe_metric=score_v0_2_run(load_run(low_path),v2_probe_cfg)
+        @test isfinite(v2_probe_metric.heldout_rmse_m)
+        @test v2_probe_metric.heldout_rmse_m != low_metric.heldout_rmse_m
+
+        # Persisted v1 artifacts retain their historical x0=1.5 held-out probe,
+        # which is outside the current v2 public action envelope.
+        p=low_out.public
+        v1_public=PublicRunArtifact(run_id=p.run_id,experiment_version=p.experiment_version,
+            protocol_id=p.protocol_id,environment_id=p.environment_id,environment_version="1",
+            action_schema_version=p.action_schema_version,observation_schema_version=p.observation_schema_version,
+            created_at=p.created_at,finalized_at=p.finalized_at,status=p.status,
+            task_description=p.task_description,action_limits=p.action_limits,
+            intervention_budget=p.intervention_budget,protocol_settings=p.protocol_settings,
+            policy_identity=p.policy_identity,events=p.events,terminal=p.terminal)
+        v1_path=write_run(joinpath(root,"v1-structural-replay"),v1_public,
+            low_out.provenance,low_out.evaluator)
+        v1_metric=score_v0_2_run(load_run(v1_path),cfg)
+        @test v1_metric.fit_status=="success"
+        @test isfinite(v1_metric.heldout_rmse_m)
+        @test isfinite(v1_metric.selected_prediction_rmse_m)
+
+        v3_world=generate_duffing_world(9_153_001;version="3")
+        v3_out=run_experiment(v3_world,FixedDesignPolicy(),RunConfig(1))
+        @test v3_out.public.environment_version=="3"
+        v3_path=write_run(joinpath(root,"v3-structural-score"),v3_out.public,v3_out.provenance,v3_out.evaluator)
+        v3_cfg=V02EvaluatorConfig(grid_points=3,max_iterations=500,
+            structural_probes=((0.1,0.0,0.0,0.0),(0.0,0.0,0.5,0.2),
+                (0.5,0.0,0.0,0.0),(0.0,0.0,0.5,0.3)))
+        v3_metric=score_v0_2_run(load_run(v3_path),v3_cfg)
+        @test v3_metric.fit_status=="success"
+        @test isfinite(v3_metric.heldout_rmse_m)
+        @test isfinite(v3_metric.selected_prediction_rmse_m)
         @test config_hash(cfg)==config_hash(cfg)
     end
 end
@@ -477,6 +657,29 @@ end
         @test report.recovered_infrastructure_slots == 1
         @test report.apparatus_failure_slots == ["s2"]
         @test !report.gate_pass
+    end
+
+    mktempdir() do temp
+        execution=joinpath(temp,"pilot");mkpath(execution)
+        slots=[(slot_id="a",policy="scientist_adaptive",condition_id="coupled|clean",environment="coupled",noise_condition="clean",world_seed=1),
+            (slot_id="b",policy="scientist_open_loop",condition_id="duffing|gaussian_0.10",environment="duffing",noise_condition="gaussian_0.10",world_seed=2)]
+        write(joinpath(execution,"execution-plan.json"),JSON3.write((protocol_id="pilot-v2",slots)))
+        write(joinpath(execution,"execution-state.json"),JSON3.write((slots=[(slot_id="a",run_ids=["r1"]),(slot_id="b",run_ids=["r2"])],)))
+        records=[(run_id="r1",classification="completed",terminal_failure_code=nothing,decision_opportunities_used=8),
+            (run_id="r2",classification="behavioral_failure",terminal_failure_code="malformed_schedule",decision_opportunities_used=1)]
+        open(joinpath(execution,"run-ledger.jsonl"),"w") do io;foreach(x->(write(io,JSON3.write(x));write(io,'\n')),records);end
+        journal=[(event="attempt_started",run_id="r1",slot_id="a",policy="scientist_adaptive",condition_id="coupled|clean",repetition_id="one"),
+            (event="attempt_started",run_id="r2",slot_id="b",policy="scientist_open_loop",condition_id="duffing|gaussian_0.10",repetition_id="one")]
+        open(joinpath(execution,"attempt-journal.jsonl"),"w") do io;foreach(x->(write(io,JSON3.write(x));write(io,'\n')),journal);end
+        report=R.summarize(execution)
+        @test report.total_logical_slots==2
+        @test report.total_raw_attempts==2
+        @test report.behavioral_terminal_slots==1
+        @test report.infrastructure_success_rate==1.0
+        @test report.gate_pass
+        @test report.by_policy["scientist_open_loop"].logical_slots==1
+        @test report.by_environment["coupled"].logical_slots==1
+        @test report.by_noise_condition["gaussian_0.10"].logical_slots==1
     end
 end
 
@@ -551,18 +754,22 @@ end
     @test !occursin("score_run(",read(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl"),String))
     @test !occursin("using Falsify",read(joinpath(root,"scripts","analyze_confirmatory_v0_1.jl"),String))
     before=ConfirmatoryScoreMaterializer.file_tree_hash(joinpath(root,"results","raw"))
-    first_result=A.analyze(root)
-    primary_path=joinpath(root,"results","derived","v0.1-confirmatory","primary_results.json")
-    first_primary=read(primary_path,String)
-    figure_path=joinpath(root,"results","derived","v0.1-confirmatory","figures","primary-paired-endpoints.svg")
-    first_figure=read(figure_path,String)
-    second_result=A.analyze(root)
-    @test first_result.effects==second_result.effects
-    @test first_primary==read(primary_path,String)
-    @test first_figure==read(figure_path,String)
+    first_result=Ref{Any}(nothing)
+    mktempdir() do temp
+        output=joinpath(temp,"analysis"); findings=joinpath(temp,"findings.md")
+        first_result[]=A.analyze(root;output_dir=output,findings_path=findings)
+        primary_path=joinpath(output,"primary_results.json")
+        first_primary=read(primary_path,String)
+        figure_path=joinpath(output,"figures","primary-paired-endpoints.svg")
+        first_figure=read(figure_path,String)
+        second_result=A.analyze(root;output_dir=output,findings_path=findings)
+        @test first_result[].effects==second_result.effects
+        @test A.hypothesis_supported(first_result[].effects,"H1")==first_result[].H1
+        @test A.hypothesis_supported(first_result[].effects,"H2")==first_result[].H2
+        @test first_primary==read(primary_path,String)
+        @test first_figure==read(figure_path,String)
+    end
     @test ConfirmatoryScoreMaterializer.file_tree_hash(joinpath(root,"results","raw"))==before
-    @test A.hypothesis_supported(first_result.effects,"H1")==first_result.H1
-    @test A.hypothesis_supported(first_result.effects,"H2")==first_result.H2
 end
 
 @testset "DAL-124 frozen confirmatory matrix" begin

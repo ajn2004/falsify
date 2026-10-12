@@ -1,0 +1,16 @@
+pilot_protocol_id = "falsify-v0.2-pilot-dal156-v2"
+pilot_version = "dal156-pilot-v2"
+environments = ["coupled_damped_oscillator_v0_2", "linear_vs_duffing_v0_2"]
+policies = ["random", "fixed"]
+world_seeds = [9560101, 9560102, 9560103, 9560104]
+noise_conditions = ["clean", "gaussian_0.10"]
+intervention_budget = 8
+decision_opportunity_cap = 16
+infrastructure_retries = 1
+clean_noise_seed = 0
+noise_seed_offset = 1000000
+policy_seed_offset = 2000000
+retry_codes = ["configuration_failure", "authentication_failure", "provider_unavailable", "rate_limited", "provider_rejection", "malformed_api_response", "client_failure"]
+provider_config = "v0.1-frontier.toml"
+evaluator_config = "v0.2-evaluator-pilot-v2.json"
+artifact_root = "results/pilot-v0.2/dal156-pilot-v2"

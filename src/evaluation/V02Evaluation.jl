@@ -1,8 +1,7 @@
 module V02Evaluation
 
-using ..Falsify: ExperimentAction, CoupledOscillatorAction, CoupledTruth, CoupledMetadata,
-    CoupledOscillatorWorld, execute_experiment, DuffingTruth, DuffingMetadata, DuffingWorld,
-    OscillatorConfig, linear, duffing, ODEProblem, solve, Tsit5, classify_run
+using ..Falsify: CoupledOscillatorAction, CoupledTruth, CoupledMetadata,
+    CoupledOscillatorWorld, execute_experiment, ODEProblem, solve, Tsit5, classify_run
 using SHA, JSON3
 
 export V02EvaluatorConfig, V02RunMetrics, score_v0_2_run, config_hash
@@ -17,7 +16,7 @@ Base.@kwdef struct V02EvaluatorConfig
     structural_zeta::Tuple{Float64,Float64} = (0.08,0.30)
     structural_omega::Tuple{Float64,Float64} = (0.9,1.8)
     structural_beta::Tuple{Float64,Float64} = (0.15,0.8)
-    structural_probes::Tuple = ((0.2,0.0,0.0,0.0),(0.0,0.0,0.2,0.8),(1.5,0.0,0.0,0.0),(0.0,0.0,0.8,1.1))
+    structural_probes::Tuple = ((0.1,0.0,0.0,0.0),(0.0,0.0,1.0,0.2),(0.5,0.0,0.0,0.0),(0.0,0.0,1.0,0.3))
     structural_prediction_scale_m::Float64 = 1.0
     failure_penalty::Float64 = 1.0
     grid_points::Int = 5
@@ -134,8 +133,13 @@ function score_v0_2_run(run,cfg::V02EvaluatorConfig=V02EvaluatorConfig())
     loaded=run isa AbstractString ? parentmodule(@__MODULE__).load_run(run) : run
     p,ev=loaded.public,loaded.evaluator; env=String(p.environment_id); envversion=String(p.environment_version); truth=ev.truth
     env in ("coupled_damped_oscillator_v0_2","linear_vs_duffing_v0_2")||throw(ArgumentError("unsupported V0.2 environment: $env"))
-    expected_version=env=="coupled_damped_oscillator_v0_2" ? "v0.2-coupled-1" : "1"
-    envversion==expected_version || throw(ArgumentError("unsupported environment version $envversion for $env"))
+    expected_versions=env=="coupled_damped_oscillator_v0_2" ? ("v0.2-coupled-1",) : ("1","2","3")
+    envversion in expected_versions || throw(ArgumentError("unsupported environment version $envversion for $env"))
+    if env == "linear_vs_duffing_v0_2" && envversion == "3"
+        legal_probe(p) = length(p) == 4 && -0.5 <= p[1] <= 0.5 && -0.5 <= p[2] <= 0.5 &&
+            -0.5 <= p[3] <= 0.5 && (p[3] == 0 ? p[4] == 0 : 0 < p[4] <= 3)
+        all(legal_probe, cfg.structural_probes) || throw(ArgumentError("v3 evaluator probes must follow v3 legal controls"))
+    end
     status=String(p.status); terminal=p.terminal
     code=terminal===nothing||terminal.failure===nothing ? nothing : String(terminal.failure.code)
     runclass=classify_run(status,code)
@@ -193,11 +197,11 @@ function score_v0_2_run(run,cfg::V02EvaluatorConfig=V02EvaluatorConfig())
     correct=chosen==trueclass
     function pred_rmse(params,beta)
         times=collect(range(0,10;length=101)); total=0.0; n=0
-        for (x0,v0,A,freq) in cfg.structural_probes
-            action=ExperimentAction(initial_displacement_m=x0,initial_velocity_m_per_s=v0,drive_acceleration_m_per_s2=A,drive_frequency_hz=freq)
-            y=_simulate_struct([x0,v0,A,freq],times,params,beta)
-            world=DuffingWorld(DuffingTruth(beta==0 ? linear : duffing,Float64(truth.zeta),Float64(truth.omega0),Float64(truth.beta)),OscillatorConfig(),DuffingMetadata("Tsit5",1e-9,1e-11,0,v"0.0.0"))
-            target=parentmodule(@__MODULE__).duffing_observe(world,action).displacement
+        probes=envversion=="1" ? ((0.2,0.0,0.0,0.0),(0.0,0.0,0.2,0.8),(1.5,0.0,0.0,0.0),(0.0,0.0,0.8,1.1)) : cfg.structural_probes
+        for (x0,v0,A,freq) in probes
+            action=[x0,v0,A,freq]
+            y=_simulate_struct(action,times,params,beta)
+            target=_simulate_struct(action,times,[Float64(truth.zeta),Float64(truth.omega0)],Float64(truth.beta))
             total+=sum(abs2,y.-target);n+=length(y)
         end
         sqrt(total/n)

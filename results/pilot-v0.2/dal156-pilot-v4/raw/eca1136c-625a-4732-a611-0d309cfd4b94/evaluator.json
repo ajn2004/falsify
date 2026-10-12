@@ -1,0 +1,1 @@
+{"truth":{"mass_2_kg":1.5,"stiffness_k_n_per_m":1.626274967669473,"damping_c_n_s_per_m":0.21054456649059022,"coupling_kc_n_per_m":0.7269782308609536,"mass_1_kg":1.0},"condition_id":"coupled_damped_oscillator_v0_2|clean","run_id":"eca1136c-625a-4732-a611-0d309cfd4b94","evaluator_metadata":{},"failures":[],"schema_version":1}
