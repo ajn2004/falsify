@@ -63,12 +63,15 @@ include(joinpath(@__DIR__, "..", "scripts", "V02Lock.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "V02SeedAudit.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "V02EvaluatorConfig.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "V02PilotProtocol.jl"))
+include(joinpath(@__DIR__, "..", "scripts", "StructuralGateAudit.jl"))
 include(joinpath(@__DIR__, "..", "scripts", "run_confirmatory_v0_2.jl"))
 
 struct ContractProbeClient <: AbstractModelClient
     content::String
     seen::Base.RefValue{Union{Nothing,ModelRequest}}
 end
+
+include(joinpath(@__DIR__, "structural_gate_audit.jl"))
 
 @testset "DAL-156 confirmatory protocol lock validation" begin
     @test V02SeedAudit.assert_disjoint_world_seeds([1,2],[3,4])
