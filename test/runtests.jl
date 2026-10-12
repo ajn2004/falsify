@@ -555,6 +555,28 @@ end
         low_path=write_run(root,low_out.public,low_out.provenance,low_out.evaluator)
         low_metric=score_v0_2_run(load_run(low_path),cfg)
         @test abs(low_metric.delta_per_sample)<high_delta[]
+        v2_probe_cfg=V02EvaluatorConfig(grid_points=3,max_iterations=80,
+            structural_probes=((0.1,0.0,0.0,0.0),))
+        v2_probe_metric=score_v0_2_run(load_run(low_path),v2_probe_cfg)
+        @test isfinite(v2_probe_metric.heldout_rmse_m)
+        @test v2_probe_metric.heldout_rmse_m != low_metric.heldout_rmse_m
+
+        # Persisted v1 artifacts retain their historical x0=1.5 held-out probe,
+        # which is outside the current v2 public action envelope.
+        p=low_out.public
+        v1_public=PublicRunArtifact(run_id=p.run_id,experiment_version=p.experiment_version,
+            protocol_id=p.protocol_id,environment_id=p.environment_id,environment_version="1",
+            action_schema_version=p.action_schema_version,observation_schema_version=p.observation_schema_version,
+            created_at=p.created_at,finalized_at=p.finalized_at,status=p.status,
+            task_description=p.task_description,action_limits=p.action_limits,
+            intervention_budget=p.intervention_budget,protocol_settings=p.protocol_settings,
+            policy_identity=p.policy_identity,events=p.events,terminal=p.terminal)
+        v1_path=write_run(joinpath(root,"v1-structural-replay"),v1_public,
+            low_out.provenance,low_out.evaluator)
+        v1_metric=score_v0_2_run(load_run(v1_path),cfg)
+        @test v1_metric.fit_status=="success"
+        @test isfinite(v1_metric.heldout_rmse_m)
+        @test isfinite(v1_metric.selected_prediction_rmse_m)
         @test config_hash(cfg)==config_hash(cfg)
     end
 end

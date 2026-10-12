@@ -1,8 +1,7 @@
 module V02Evaluation
 
-using ..Falsify: ExperimentAction, CoupledOscillatorAction, CoupledTruth, CoupledMetadata,
-    CoupledOscillatorWorld, execute_experiment, DuffingTruth, DuffingMetadata, DuffingWorld,
-    OscillatorConfig, linear, duffing, ODEProblem, solve, Tsit5, classify_run
+using ..Falsify: CoupledOscillatorAction, CoupledTruth, CoupledMetadata,
+    CoupledOscillatorWorld, execute_experiment, ODEProblem, solve, Tsit5, classify_run
 using SHA, JSON3
 
 export V02EvaluatorConfig, V02RunMetrics, score_v0_2_run, config_hash
@@ -195,10 +194,9 @@ function score_v0_2_run(run,cfg::V02EvaluatorConfig=V02EvaluatorConfig())
         times=collect(range(0,10;length=101)); total=0.0; n=0
         probes=envversion=="1" ? ((0.2,0.0,0.0,0.0),(0.0,0.0,0.2,0.8),(1.5,0.0,0.0,0.0),(0.0,0.0,0.8,1.1)) : cfg.structural_probes
         for (x0,v0,A,freq) in probes
-            action=ExperimentAction(initial_displacement_m=x0,initial_velocity_m_per_s=v0,drive_acceleration_m_per_s2=A,drive_frequency_hz=freq)
-            y=_simulate_struct([x0,v0,A,freq],times,params,beta)
-            world=DuffingWorld(DuffingTruth(beta==0 ? linear : duffing,Float64(truth.zeta),Float64(truth.omega0),Float64(truth.beta)),OscillatorConfig(),DuffingMetadata("Tsit5",1e-9,1e-11,0,v"0.0.0"))
-            target=parentmodule(@__MODULE__).duffing_observe(world,action).displacement
+            action=[x0,v0,A,freq]
+            y=_simulate_struct(action,times,params,beta)
+            target=_simulate_struct(action,times,[Float64(truth.zeta),Float64(truth.omega0)],Float64(truth.beta))
             total+=sum(abs2,y.-target);n+=length(y)
         end
         sqrt(total/n)

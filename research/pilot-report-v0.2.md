@@ -214,6 +214,12 @@ and resolution of structural saturation.
 
 ## Structural v2 noisy reassessment (supersedes the clean-saturation gate)
 
+**Interim status only:** the assessment in this section predates the v8
+policy-independent action map below. Its conclusion that v2 was not accepted
+because Duffing recovery was poor under generic Random/Fixed actions is
+superseded by the action-conditional evidence and current decision at the end of
+this report.
+
 Clean results are descriptive apparatus/evaluator positive controls, not the
 structural inferential endpoint. The frozen V0.1 precedent treats clean as a
 descriptive control and excludes it from confirmatory inference; near-perfect
@@ -286,3 +292,79 @@ diagnostic under σ=0.25, with signal-relative summaries, before any new
 environment version is designed. Do not increase noise to force errors or
 use LLM outcomes to choose geometry. No live LLM pilot, reliability gate,
 confirmatory seeds, preregistration, or real lock has been executed.
+
+## Policy-independent finite-noise action map (v8; current apparatus decision)
+
+This diagnostic used structural environment version 2 and a fresh exploratory
+balanced truth set, selected by class from seeds 9,590,000 onward independently
+of the v2 design choice: 8 linear and 8 Duffing worlds (truth seeds are recorded
+in the raw diagnostic). It evaluated the complete structured legal grid of 81
+unique combinations: `x₀,v₀ ∈ {-0.5,0,0.5}`, crossed with 9 drive settings from
+zero drive to signed/unit-amplitude forcing at frequencies 0.2–2.5 Hz. Each
+action used the fixed 10 s/101-sample schedule. Conditions were clean
+(descriptive only) and Gaussian σ=0.05 m (three independently seeded noise
+replicates per truth/action). There were 5,184 rows: 1,296 clean and 3,888 noisy.
+The diagnostic is policy-independent; no Random, Fixed, adaptive or open-loop
+policy selected its geometry. Both nuisance fits converged in every row, and
+selected-model prediction RMSE was finite in all rows.
+
+### A. Duffing recoverability under σ=0.05 m
+
+Duffing was recoverable through experiment choice across the sampled support:
+all 8/8 Duffing truths had at least one action with correct selection in at
+least 2 of 3 independent noisy replicates. Truth support observed in this small
+sample was β=0.176–0.787, ζ=0.118–0.283, and ω₀=0.994–1.469. The action
+`(0.5,0.5,1.0,0.2)` recovered 8/8 Duffing truths by replicate majority (23/24
+individual fits) and selected linear for 8/8 linear truths (24/24 individual
+fits). This establishes recoverability in this exploratory sample, not a
+population guarantee.
+
+### B–D. Ambiguity, discrimination, and action dependence
+
+Both regimes exist and intervention choice matters. Zero initial state and zero
+drive is uninformative about Duffing: it recovered 0/8 Duffing truths, and
+Δ=(BIC_linear−BIC_Duffing)/N was −0.04569 for every truth/replicate. With
+`(x₀,v₀,A,f)=(0.5,0.5,0,0)`, Duffing recovery was 3/8, with Δ range −0.1671
+to 0.2349. By contrast, high-amplitude low-frequency forcing can create strong
+separation: at `(0.5,0.5,1.0,0.2)`, Δ ranged −95.992 to 13.288 across classes,
+truths and replicates, with the correct class selected for 47/48 observations.
+The sign convention is positive for Duffing evidence. Other legal actions were
+intermediate; across the 81 actions, noisy Duffing majority recovery ranged
+from 0/8 to 8/8, while action-level median Δ ranged from −0.0510 to 0.1121.
+Thus the action landscape has ambiguous and discriminating regions, rather than
+being uniformly one or the other.
+
+Across all noisy rows, the median clean-trajectory RMS was 0.211 m (range
+0–1.376 m), median peak amplitude 0.500 m (0–2.294 m), and median σ/RMS was
+0.236 (range 0.036–8.976 where RMS was nonzero). For the one-action shortcut
+`(0.5,0.5,1.0,0.2)`, median signal RMS was 0.776 m and median σ/RMS 0.064.
+The noise level itself is therefore defensible, but that action has a large
+signal-to-noise advantage. Full class-conditional Δ, both candidate scores,
+convergence, prediction error, signal RMS/peak, and noise ratios are preserved
+per row in `results/pilot-v0.2/structural-action-map-v8/diagnostic.json`.
+
+### E. Universal-action check and prospective decision
+
+**FAIL for the experiment-selection challenge.** A single obvious legal
+strategy—maximum positive initial displacement and velocity, maximum drive
+amplitude, and one fixed low-frequency drive—classified all 16 sampled worlds
+correctly by the noisy replicate-majority rule in one intervention. This is
+precisely the universal trivial action the apparatus gate excludes. This is not
+a finding that Duffing is undetectable: targeted actions recover it, and weak
+actions remain ambiguous. Rather, the action map shows the distinction is
+available immediately to a simple predeclared action, leaving no meaningful
+selection problem on these conditions. Clean map results remain descriptive
+positive controls only.
+
+No v3 was implemented. The smallest scientifically natural prospective change
+to investigate is reducing the common legal drive-amplitude ceiling: at
+`(0.5,0.5,0.5,0.2)`, Duffing recovery fell to 4/8, while the maximum-amplitude
+low-frequency action is the shortcut. Any proposed version change must be
+reassessed on fresh policy-independent truths/actions, and must preserve both
+ambiguous and discriminating conditions; do not tune FixedDesign, increase
+noise merely to induce errors, or use LLM outcomes to choose geometry.
+
+No live LLM pilot ran. Accordingly there are no LLM logical slots, reliability
+estimate, token/cost/latency observations, confirmatory seeds, preregistration,
+or real protocol lock. DAL-156 remains blocked; this action map does not
+authorize provider calls or confirmation.
