@@ -334,6 +334,12 @@ from 0/8 to 8/8, while action-level median Δ ranged from −0.0510 to 0.1121.
 Thus the action landscape has ambiguous and discriminating regions, rather than
 being uniformly one or the other.
 
+Across all action/truth/replicate rows, class-conditional noisy Δ had median
+−0.04946 (range −141.189 to 3.713) for linear truths and median −0.04113
+(range −0.190 to 14.132) for Duffing truths. These aggregate medians favor the
+linear candidate, while positive tails at discriminating actions retain clear
+Duffing evidence; Δ is a signed BIC difference per sample, not a probability.
+
 Across all noisy rows, the median clean-trajectory RMS was 0.211 m (range
 0–1.376 m), median peak amplitude 0.500 m (0–2.294 m), and median σ/RMS was
 0.236 (range 0.036–8.976 where RMS was nonzero). For the one-action shortcut
@@ -356,15 +362,56 @@ available immediately to a simple predeclared action, leaving no meaningful
 selection problem on these conditions. Clean map results remain descriptive
 positive controls only.
 
-No v3 was implemented. The smallest scientifically natural prospective change
-to investigate is reducing the common legal drive-amplitude ceiling: at
-`(0.5,0.5,0.5,0.2)`, Duffing recovery fell to 4/8, while the maximum-amplitude
-low-frequency action is the shortcut. Any proposed version change must be
-reassessed on fresh policy-independent truths/actions, and must preserve both
-ambiguous and discriminating conditions; do not tune FixedDesign, increase
-noise merely to induce errors, or use LLM outcomes to choose geometry.
+### F. Prospective v3 assessment and finite-budget gate
+
+The candidate v3 retained the v2 truth supports and 10 s/101-sample schedule,
+but capped the class-neutral drive acceleration at ±0.5 m/s². Its implementation
+is versioned and does not change v1/v2 limits or scoring. The diagnostic is
+`results/pilot-v0.2/structural-v3-gate-v1/diagnostic.json`; its v2 shortcut
+holdout, v3 action map, and v3 budget validation use disjoint fresh seed ranges.
+This is exploratory evidence, not a population guarantee.
+
+The v2 shortcut was retested on 12 new balanced worlds with three independent
+σ=0.05 m replicates each. It classified all 12/12 linear worlds and 9/12 Duffing
+worlds by replicate majority (36/36 and 26/36 individual fits, respectively),
+so the original 16/16 result does not establish a population-wide universal
+strategy. The candidate v3 action map covered 16 balanced worlds and 99 legal
+actions (1,584 clean descriptive rows and 4,752 noisy replicate rows). Both fits
+converged in every row. Clean results included perfectly discriminating actions;
+under noise, the mapped landscape retained ambiguous actions (zero-state/no
+drive selected linear on all eight Duffing truths) and partially discriminating
+actions (for example, `(0.5,0.5,0.5,0.2)` selected Duffing on 4/8 and linear on
+8/8 truths by replicate majority). The sample therefore does not indicate
+general Duffing unidentifiability or a numerical failure.
+
+The required finite-budget diagnostic used another 16 balanced v3 worlds,
+three noise replicates, and budgets 1/2/4/8. It compared a repeated straightforward
+high-energy/low-frequency intervention, a diverse precommitted schedule, the
+unchanged FixedDesignPolicy, and seeded RandomPolicy. No candidate fit failed
+in 1,152 scored schedule/replicate/budget records. The diverse open-loop schedule
+classified all 8/8 linear and 8/8 Duffing worlds by budget 4 (and remained 16/16
+at budget 8). Random reached 15/24 Duffing world/design-replicate majorities by
+budget 8; FixedDesign reached 3/8 Duffing worlds at budget 8. These results show
+that the selection problem remains difficult for some unoptimized baselines,
+but a simple observation-independent schedule saturates the structural endpoint
+well before the proposed eight-intervention budget.
+
+**FAIL — do not advance candidate v3.** The apparatus is stable and has
+finite-noise ambiguous and discriminating actions, but fails the stated
+finite-budget gate: a straightforward diverse open-loop schedule solved every
+sampled world by budget 4. No LLM outcomes informed geometry, and FixedDesign
+was not modified. The smaller drive ceiling is therefore not a sufficient
+scientific redesign. Stop rather than selecting another arbitrary parameter
+version. The current evidence implicates the pair of candidate models and
+available forcing/observation geometry: the nonlinear term leaves signatures
+that accumulate across a few legal fixed experiments. This does not isolate
+whether the dominant cause is the model pair, forcing control, 101-sample
+protocol, or budget; that needs a principled redesign question and fresh
+diagnostics, not threshold tuning. The evaluator is not implicated by observed
+fit failures, though the scoring model remains part of the apparatus and merits
+review before a future redesign.
 
 No live LLM pilot ran. Accordingly there are no LLM logical slots, reliability
 estimate, token/cost/latency observations, confirmatory seeds, preregistration,
-or real protocol lock. DAL-156 remains blocked; this action map does not
-authorize provider calls or confirmation.
+or real protocol lock. DAL-156 remains blocked; the failed candidate gate does
+not authorize provider calls or confirmation.

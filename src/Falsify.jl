@@ -383,10 +383,11 @@ action_schema(::OscillatorWorld) = legacy_action_schema()
 validate_environment_action(::OscillatorWorld, action::ExperimentAction) =
     _validate_oscillator_environment_action(action)
 function _validate_oscillator_environment_action(a::ExperimentAction;
-        displacement_bounds=X0_RANGE, velocity_bounds=V0_RANGE)
+        displacement_bounds=X0_RANGE, velocity_bounds=V0_RANGE,
+        acceleration_bounds=DRIVE_ACCELERATION_RANGE)
     inrange(x, bounds) = isfinite(x) && bounds[1] <= x <= bounds[2]
     all((inrange(a.initial_displacement_m, displacement_bounds), inrange(a.initial_velocity_m_per_s, velocity_bounds),
-        inrange(a.drive_acceleration_m_per_s2, DRIVE_ACCELERATION_RANGE), inrange(a.drive_frequency_hz, DRIVE_FREQUENCY_RANGE))) ||
+        inrange(a.drive_acceleration_m_per_s2, acceleration_bounds), inrange(a.drive_frequency_hz, DRIVE_FREQUENCY_RANGE))) ||
         return ValidationResult(false, :out_of_bounds)
     (a.drive_acceleration_m_per_s2 == 0 && a.drive_frequency_hz != 0) && return ValidationResult(false, :invalid_drive)
     (a.drive_acceleration_m_per_s2 != 0 && a.drive_frequency_hz <= 0) && return ValidationResult(false, :invalid_drive)
@@ -399,7 +400,7 @@ apply_environment_noise(::OscillatorWorld, clean::CleanOscillatorObservation, no
 include("environments/DuffingEnvironment.jl")
 export DuffingClass, DuffingTruth, DuffingWorld, DuffingMetadata,
        generate_duffing_world, duffing_observe, DUFFING_ZETA_RANGE,
-       DUFFING_OMEGA_RANGE, DUFFING_BETA_RANGE
+       DUFFING_OMEGA_RANGE, DUFFING_BETA_RANGE, DUFFING_V3_DRIVE_ACCELERATION_RANGE
 
 include("artifacts/RunArtifacts.jl")
 using .RunArtifacts: PublicRunArtifact, ProvenanceArtifact, EvaluatorArtifact,

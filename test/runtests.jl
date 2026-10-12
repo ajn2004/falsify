@@ -373,6 +373,10 @@ end
     @test any(w -> w.truth.model_class == Falsify.linear, worlds)
     @test any(w -> w.truth.model_class == Falsify.duffing, worlds)
     @test generate_duffing_world(42).truth == generate_duffing_world(42).truth
+    @test environment_version(generate_duffing_world(42)) == "2"
+    v3_seed_world=generate_duffing_world(42;version="3")
+    @test v3_seed_world.truth == generate_duffing_world(42).truth
+    @test environment_version(v3_seed_world) == "3"
     @test generate_duffing_world(42).truth.beta == (generate_duffing_world(42).truth.model_class == Falsify.linear ? 0.0 : generate_duffing_world(42).truth.beta)
     @test all(w -> DUFFING_ZETA_RANGE[1] <= w.truth.zeta <= DUFFING_ZETA_RANGE[2] &&
         DUFFING_OMEGA_RANGE[1] <= w.truth.omega0 <= DUFFING_OMEGA_RANGE[2] &&
@@ -400,6 +404,19 @@ end
     @test !validate_environment_action(duffing_world,ExperimentAction(initial_velocity_m_per_s=-0.51)).valid
     @test validate_environment_action(linear_world,ExperimentAction(initial_displacement_m=0.5)).valid
     @test validate_environment_action(duffing_world,ExperimentAction(initial_displacement_m=0.5)).valid
+    v3_world=generate_duffing_world(4203;version="3")
+    v3_limits=limits_for(public_task(v3_world))
+    @test v3_limits.displacement_m == (-0.5,0.5)
+    @test v3_limits.velocity_m_per_s == (-0.5,0.5)
+    @test v3_limits.drive_acceleration_m_per_s2 == (-0.5,0.5)
+    @test v3_limits.drive_frequency_hz == (0.0,3.0)
+    @test validate_environment_action(v3_world,ExperimentAction(initial_displacement_m=0.5,
+        drive_acceleration_m_per_s2=0.5,drive_frequency_hz=0.2)).valid
+    @test !validate_environment_action(v3_world,ExperimentAction(initial_displacement_m=0.0,
+        drive_acceleration_m_per_s2=0.500001,drive_frequency_hz=0.2)).valid
+    @test validate_environment_action(duffing_world,ExperimentAction(initial_displacement_m=0.0,
+        drive_acceleration_m_per_s2=1.0,drive_frequency_hz=0.2)).valid
+    @test occursin("[-0.5,0.5]",public_task(v3_world).model_description)
     distance(world_a, world_b, action) = sqrt(sum(abs2, duffing_observe(world_a, action).displacement .-
         duffing_observe(world_b, action).displacement) / 101)
     @test distance(linear_world, duffing_world, high) > 20distance(linear_world, duffing_world, low)
@@ -577,6 +594,18 @@ end
         @test v1_metric.fit_status=="success"
         @test isfinite(v1_metric.heldout_rmse_m)
         @test isfinite(v1_metric.selected_prediction_rmse_m)
+
+        v3_world=generate_duffing_world(9_153_001;version="3")
+        v3_out=run_experiment(v3_world,FixedDesignPolicy(),RunConfig(1))
+        @test v3_out.public.environment_version=="3"
+        v3_path=write_run(joinpath(root,"v3-structural-score"),v3_out.public,v3_out.provenance,v3_out.evaluator)
+        v3_cfg=V02EvaluatorConfig(grid_points=3,max_iterations=500,
+            structural_probes=((0.1,0.0,0.0,0.0),(0.0,0.0,0.5,0.2),
+                (0.5,0.0,0.0,0.0),(0.0,0.0,0.5,0.3)))
+        v3_metric=score_v0_2_run(load_run(v3_path),v3_cfg)
+        @test v3_metric.fit_status=="success"
+        @test isfinite(v3_metric.heldout_rmse_m)
+        @test isfinite(v3_metric.selected_prediction_rmse_m)
         @test config_hash(cfg)==config_hash(cfg)
     end
 end

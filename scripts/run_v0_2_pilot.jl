@@ -18,6 +18,8 @@ function main(config_path)
     out=normpath(joinpath(root,String(cfg["artifact_root"]))); allowed=joinpath(root,"results","pilot-v0.2"); relative=relpath(out,allowed)
     (relative==".."||startswith(relative,"../")||startswith(relative,"..\\")) && error("pilot artifacts must remain in results/pilot-v0.2")
     ENVIRONMENT=String.(cfg["environments"]); policies=String.(cfg["policies"])
+    structural_version=String(get(cfg,"structural_environment_version","2"))
+    structural_version in ("2","3") || error("unsupported structural environment version $structural_version")
     all(p->p in ("random","fixed","adaptive_llm","open_loop_llm"),policies) || error("unsupported pilot policy")
     Set(String.(cfg["retry_codes"]))==Set(Falsify.PROVIDER_INFRASTRUCTURE_CODES) || error("retry codes must exactly match the frozen infrastructure classes")
     Int(cfg["infrastructure_retries"])==1 || error("pilot retry allowance is frozen at one infrastructure retry")
@@ -34,14 +36,15 @@ function main(config_path)
         block="$(env)|seed=$(seed)|noise=$(noise)|budget=$(budget)"; slot="$(block)|policy=$(policy_name)"; rep="pilot-1"
         noise_seed=noise=="clean" ? Int(cfg["clean_noise_seed"]) : seed+Int(cfg["noise_seed_offset"])
         policy_seed=policy_name=="random" ? seed+Int(cfg["policy_seed_offset"])+findfirst(==(policy_name),policies) : nothing
-        world=env=="coupled_damped_oscillator_v0_2" ? generate_coupled_world(seed) : env=="linear_vs_duffing_v0_2" ? generate_duffing_world(seed) : error("unsupported environment $env")
+        world=env=="coupled_damped_oscillator_v0_2" ? generate_coupled_world(seed) : env=="linear_vs_duffing_v0_2" ? generate_duffing_world(seed;version=structural_version) : error("unsupported environment $env")
         n=noise_for(noise)
         report_policy=policy_name=="adaptive_llm" ? "scientist_adaptive" : policy_name=="open_loop_llm" ? "scientist_open_loop" : policy_name=="fixed" ? "fixed_design" : "random"
-        push!(slots,(slot_id=slot,policy=report_policy,treatment=policy_name,condition_id="$(env)|$(noise)|budget=$(budget)",environment=env,noise_condition=noise,intervention_budget=budget,world_seed=seed,noise_seed,policy_seed,repetition_id=rep,block_id=block))
+        env_version=env=="linear_vs_duffing_v0_2" ? structural_version : "v0.2-coupled-1"
+        push!(slots,(slot_id=slot,policy=report_policy,treatment=policy_name,condition_id="$(env)|v$(env_version)|$(noise)|budget=$(budget)",environment=env,environment_version=env_version,noise_condition=noise,intervention_budget=budget,world_seed=seed,noise_seed,policy_seed,repetition_id=rep,block_id=block))
     end
     open(planpath,"w") do io; write(io,JSON3.write((protocol_id=cfg["pilot_protocol_id"],slots)));write(io,'\n');end
     for s in slots
-        world=s.environment=="coupled_damped_oscillator_v0_2" ? generate_coupled_world(s.world_seed) : generate_duffing_world(s.world_seed)
+        world=s.environment=="coupled_damped_oscillator_v0_2" ? generate_coupled_world(s.world_seed) : generate_duffing_world(s.world_seed;version=structural_version)
         noise=noise_for(s.noise_condition)
         runconfig=RunConfig(s.intervention_budget;max_decision_opportunities=Int(cfg["decision_opportunity_cap"]),observation_noise=noise,noise_seed=s.noise_seed)
         classification="pending"; attempts=0; attempt=nothing; attempt_ids=String[]; attempt_classes=String[]
@@ -56,7 +59,7 @@ function main(config_path)
             open(journal,"a") do io
                 write(io,JSON3.write((event="attempt_started",run_id=attempt.run_id,slot_id=s.slot_id,policy=s.policy,
                     condition_id=s.condition_id,repetition_id="$(s.repetition_id)$(attempts==1 ? "" : "-retry$(attempts-1)")",
-                    protocol_id=cfg["pilot_protocol_id"],environment=s.environment,noise_condition=s.noise_condition,world_seed=s.world_seed,noise_seed=s.noise_seed)));write(io,'\n')
+                    protocol_id=cfg["pilot_protocol_id"],environment=s.environment,environment_version=s.environment_version,noise_condition=s.noise_condition,world_seed=s.world_seed,noise_seed=s.noise_seed)));write(io,'\n')
                 write(io,JSON3.write((event="attempt_finished",run_id=attempt.run_id,slot_id=s.slot_id,classification,policy=s.policy,protocol_id=cfg["pilot_protocol_id"])));write(io,'\n')
             end
             used=attempt.outcome===nothing ? 0 : attempt.outcome.public.terminal.interventions_used

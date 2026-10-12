@@ -133,8 +133,13 @@ function score_v0_2_run(run,cfg::V02EvaluatorConfig=V02EvaluatorConfig())
     loaded=run isa AbstractString ? parentmodule(@__MODULE__).load_run(run) : run
     p,ev=loaded.public,loaded.evaluator; env=String(p.environment_id); envversion=String(p.environment_version); truth=ev.truth
     env in ("coupled_damped_oscillator_v0_2","linear_vs_duffing_v0_2")||throw(ArgumentError("unsupported V0.2 environment: $env"))
-    expected_versions=env=="coupled_damped_oscillator_v0_2" ? ("v0.2-coupled-1",) : ("1","2")
+    expected_versions=env=="coupled_damped_oscillator_v0_2" ? ("v0.2-coupled-1",) : ("1","2","3")
     envversion in expected_versions || throw(ArgumentError("unsupported environment version $envversion for $env"))
+    if env == "linear_vs_duffing_v0_2" && envversion == "3"
+        legal_probe(p) = length(p) == 4 && -0.5 <= p[1] <= 0.5 && -0.5 <= p[2] <= 0.5 &&
+            -0.5 <= p[3] <= 0.5 && (p[3] == 0 ? p[4] == 0 : 0 < p[4] <= 3)
+        all(legal_probe, cfg.structural_probes) || throw(ArgumentError("v3 evaluator probes must follow v3 legal controls"))
+    end
     status=String(p.status); terminal=p.terminal
     code=terminal===nothing||terminal.failure===nothing ? nothing : String(terminal.failure.code)
     runclass=classify_run(status,code)
